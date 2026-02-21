@@ -25,13 +25,13 @@ STUB_ENGINE    = src/stubs/stub_engine.c
 
 # Real implementations (uncomment as each person completes their work)
 # REAL_KERNELS   = src/kernels/kernels.c
-# REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
+REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
 # REAL_TOKENIZER = src/tokenizer/tokenizer.c src/tokenizer/sampler.c src/tokenizer/cli.c
 # REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c
 
 # Use stubs by default (swap to REAL_* when ready)
 KERNELS   = $(STUB_KERNELS)
-MEMORY    = $(STUB_MEMORY)
+MEMORY    = $(REAL_MEMORY)
 TOKENIZER = $(STUB_TOKENIZER)
 ENGINE    = $(STUB_ENGINE)
 
@@ -50,7 +50,7 @@ $(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) | $(BUILD
 $(BUILD)/test_kernels: tests/test_kernels.c $(STUB_KERNELS) | $(BUILD)
 	$(CC) $(CFLAGS) -DSTUB_MODE=1 -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_memory: tests/test_memory.c $(STUB_MEMORY) | $(BUILD)
+$(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_tokenizer: tests/test_tokenizer.c $(STUB_TOKENIZER) | $(BUILD)
