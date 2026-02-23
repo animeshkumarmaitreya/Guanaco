@@ -13,7 +13,7 @@
 #============================================================================
 
 CC       = gcc
-CFLAGS   = -Wall -Wextra -Wpedantic -std=c11 -O2 -Isrc/include
+CFLAGS   = -Wall -Wextra -Wpedantic -std=c11 -O2 -Isrc/include -mavx2 -mfma
 LDFLAGS  = -lm
 DEBUG_FLAGS = -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 BUILD    = build
@@ -26,14 +26,14 @@ STUB_ENGINE    = src/stubs/stub_engine.c
 
 # Real implementations
 REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c
-# REAL_KERNELS   = src/kernels/kernels.c
-# REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
-# REAL_TOKENIZER = src/tokenizer/tokenizer.c src/tokenizer/sampler.c src/tokenizer/cli.c
+REAL_KERNELS   = src/kernels/kernels.c
+REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
+REAL_TOKENIZER = src/tokenizer/tokenizer.c
 
 # Active per module — swap STUB ↔ REAL as each person finishes
-KERNELS   = $(STUB_KERNELS)
-MEMORY    = $(STUB_MEMORY)
-TOKENIZER = $(STUB_TOKENIZER)
+KERNELS   = $(REAL_KERNELS)
+MEMORY    = $(REAL_MEMORY)
+TOKENIZER = $(REAL_TOKENIZER)
 ENGINE    = $(REAL_ENGINE)
 
 .PHONY: all clean test test_kernels test_memory test_tokenizer test_engine debug
@@ -48,16 +48,16 @@ $(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) | $(BUILD
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Test binaries ----
-$(BUILD)/test_kernels: tests/test_kernels.c $(STUB_KERNELS) | $(BUILD)
-	$(CC) $(CFLAGS) -DSTUB_MODE=1 -o $@ $^ $(LDFLAGS)
-
-$(BUILD)/test_memory: tests/test_memory.c $(STUB_MEMORY) | $(BUILD)
+$(BUILD)/test_kernels: tests/test_kernels.c $(REAL_KERNELS) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_tokenizer: tests/test_tokenizer.c $(STUB_TOKENIZER) | $(BUILD)
+$(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(STUB_KERNELS) $(STUB_MEMORY) $(STUB_TOKENIZER) | $(BUILD)
+$(BUILD)/test_tokenizer: tests/test_tokenizer.c $(REAL_TOKENIZER) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_MEMORY) $(REAL_TOKENIZER) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Run tests ----

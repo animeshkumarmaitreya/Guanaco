@@ -11,9 +11,11 @@
 
 typedef struct Tokenizer Tokenizer;
 
-/* Load tokenizer vocabulary from a GGUF model file or vocab file.
+#include "engine.h"
+
+/* Load tokenizer vocabulary from the model configuration array.
  * Returns NULL on failure. */
-Tokenizer* tokenizer_create(const char* model_path);
+Tokenizer* tokenizer_create(const ModelConfig* cfg);
 
 /* Encode UTF-8 text into token IDs.
  * Returns malloc'd array of token IDs. Caller must free().

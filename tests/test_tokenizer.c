@@ -70,7 +70,9 @@ static void test_temperature_deterministic(void) {
 /* ---- Tokenizer tests ---- */
 
 static void test_tokenizer_create(void) {
-    Tokenizer* tok = tokenizer_create("dummy_path");
+    char* dummy[1] = {"A"};
+    ModelConfig cfg = { .vocab_size = 1, .vocab_strings = dummy };
+    Tokenizer* tok = tokenizer_create(&cfg);
     if (tok) {
         PASS("tokenizer_create");
         tokenizer_destroy(tok);
@@ -80,7 +82,9 @@ static void test_tokenizer_create(void) {
 }
 
 static void test_tokenizer_basic(void) {
-    Tokenizer* tok = tokenizer_create("dummy");
+    char* dummy[2] = {"Hell", "o"};
+    ModelConfig cfg = { .vocab_size = 2, .vocab_strings = dummy };
+    Tokenizer* tok = tokenizer_create(&cfg);
     if (!tok) { FAIL("tokenizer_basic", "create failed"); return; }
 
     int len = 0;
@@ -97,7 +101,9 @@ static void test_tokenizer_basic(void) {
 }
 
 static void test_tokenizer_empty(void) {
-    Tokenizer* tok = tokenizer_create("dummy");
+    char* dummy[1] = {"A"};
+    ModelConfig cfg = { .vocab_size = 1, .vocab_strings = dummy };
+    Tokenizer* tok = tokenizer_create(&cfg);
     if (!tok) { FAIL("tokenizer_empty", "create failed"); return; }
 
     int len = 0;
@@ -113,7 +119,9 @@ static void test_tokenizer_empty(void) {
 }
 
 static void test_detokenize(void) {
-    Tokenizer* tok = tokenizer_create("dummy");
+    char* dummy[100] = {0}; dummy[65] = "A";
+    ModelConfig cfg = { .vocab_size = 100, .vocab_strings = dummy };
+    Tokenizer* tok = tokenizer_create(&cfg);
     if (!tok) { FAIL("detokenize", "create failed"); return; }
 
     const char* s = detokenize(tok, 65);  /* ASCII 'A' */

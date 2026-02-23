@@ -63,6 +63,8 @@ typedef struct {
     int vocab_size;     /* vocabulary size */
     int ff_dim;         /* MLP intermediate dimension (H_ff) */
     int max_seq_len;    /* maximum sequence length */
+    char** vocab_strings;
+    float* vocab_scores;
 } ModelConfig;
 
 /* ---------- Per-layer weights ---------- */

@@ -332,6 +332,34 @@ ModelWeights* load_model(const char* path, Arena* arena) {
                 alignment = (uint32_t)val;
             /* else: skip — we don't need this KV */
         }
+        else if (vtype == GGUF_TYPE_ARRAY && strcmp(key.str, "tokenizer.ggml.tokens") == 0) {
+            uint32_t arr_type = read_u32(&r);
+            uint64_t arr_len  = read_u64(&r);
+            if (arr_type == GGUF_TYPE_STRING) {
+                cfg.vocab_size = (int)arr_len;
+                cfg.vocab_strings = (char**)calloc(arr_len, sizeof(char*));
+                for (uint64_t v = 0; v < arr_len; v++) {
+                    GGUFString s = read_gguf_string(&r);
+                    cfg.vocab_strings[v] = s.str; /* keep allocated string */
+                }
+            } else {
+                for (uint64_t v = 0; v < arr_len; v++) skip_metadata_value(&r, arr_type);
+            }
+            matched = 1;
+        }
+        else if (vtype == GGUF_TYPE_ARRAY && strcmp(key.str, "tokenizer.ggml.scores") == 0) {
+            uint32_t arr_type = read_u32(&r);
+            uint64_t arr_len  = read_u64(&r);
+            if (arr_type == GGUF_TYPE_FLOAT32) {
+                cfg.vocab_scores = (float*)calloc(arr_len, sizeof(float));
+                for (uint64_t v = 0; v < arr_len; v++) {
+                    cfg.vocab_scores[v] = read_f32(&r);
+                }
+            } else {
+                for (uint64_t v = 0; v < arr_len; v++) skip_metadata_value(&r, arr_type);
+            }
+            matched = 1;
+        }
 
         if (!matched) {
             /* Read as u64 for matching against uint64 keys, or skip */
@@ -586,6 +614,16 @@ void free_model(ModelWeights* model) {
         free(lw->rms_ffn);
     }
     free(model->layers);
+
+    if (model->config.vocab_strings) {
+        for (int i = 0; i < model->config.vocab_size; i++) {
+            free(model->config.vocab_strings[i]);
+        }
+        free(model->config.vocab_strings);
+    }
+    if (model->config.vocab_scores) {
+        free(model->config.vocab_scores);
+    }
 
     /* Unmap and close file */
     if (g_loader_state) {

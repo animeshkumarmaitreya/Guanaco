@@ -82,7 +82,7 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     }
 
     /* ---- Tokenize prompt ---- */
-    Tokenizer* tok = tokenizer_create(model_path);
+    Tokenizer* tok = tokenizer_create(cfg);
     if (!tok) {
         fprintf(stderr, "Failed to create tokenizer\n");
         scratch_destroy(scr);
