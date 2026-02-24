@@ -64,10 +64,16 @@ void* arena_alloc(Arena* arena, size_t size, size_t alignment) {
     if (arena == NULL || size == 0) return NULL;
     if (alignment < 64) alignment = 64;  /* minimum 64-byte alignment */
 
-    size_t aligned_offset = align_up(arena->offset, alignment);
+    /* Align the absolute pointer address, not just the offset.
+     * This is critical for large alignments (e.g. 1 MiB) where the
+     * mmap base may not itself be aligned to that boundary. */
+    uintptr_t current_addr = (uintptr_t)arena->base + arena->offset;
+    uintptr_t aligned_addr = (current_addr + alignment - 1) & ~(alignment - 1);
+    size_t aligned_offset  = (size_t)(aligned_addr - (uintptr_t)arena->base);
+
     if (aligned_offset + size > arena->capacity) return NULL;
 
-    void* ptr = arena->base + aligned_offset;
+    void* ptr = (void*)aligned_addr;
     arena->offset = aligned_offset + size;
     return ptr;
 }

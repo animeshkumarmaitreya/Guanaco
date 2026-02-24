@@ -26,8 +26,8 @@ struct KVCache {
     float*       v_data;     /* all V: same layout */
     ModelConfig  cfg;
     int          max_seq;
-    Tensor       k_view;     /* reusable tensor view for get_k */
-    Tensor       v_view;     /* reusable tensor view for get_v */
+    Tensor*      k_views;    /* per-layer tensor views for get_k [n_layers] */
+    Tensor*      v_views;    /* per-layer tensor views for get_v [n_layers] */
 };
 
 KVCache* kv_cache_create(Arena* arena, ModelConfig* cfg, int max_seq_len) {
@@ -42,8 +42,17 @@ KVCache* kv_cache_create(Arena* arena, ModelConfig* cfg, int max_seq_len) {
 
     kv->cfg     = *cfg;
     kv->max_seq = max_seq_len;
-    memset(&kv->k_view, 0, sizeof(Tensor));
-    memset(&kv->v_view, 0, sizeof(Tensor));
+
+    /* Allocate per-layer Tensor views from the arena */
+    size_t views_bytes = (size_t)cfg->n_layers * sizeof(Tensor);
+    kv->k_views = (Tensor*)arena_alloc(arena, views_bytes, 64);
+    kv->v_views = (Tensor*)arena_alloc(arena, views_bytes, 64);
+    if (kv->k_views == NULL || kv->v_views == NULL) {
+        fprintf(stderr, "[kv] failed to allocate tensor views\n");
+        return NULL;
+    }
+    memset(kv->k_views, 0, views_bytes);
+    memset(kv->v_views, 0, views_bytes);
 
     /* Total floats per cache (K or V):
      *   n_layers × n_kv_heads × max_seq_len × head_dim */
@@ -99,43 +108,46 @@ int kv_cache_append(KVCache* kv, int layer, const Tensor* k, const Tensor* v, in
 
 Tensor* kv_cache_get_k(KVCache* kv, int layer, int up_to_pos) {
     if (kv == NULL) return NULL;
+    if (layer < 0 || layer >= kv->cfg.n_layers) return NULL;
 
     int n_kv = kv->cfg.n_kv_heads;
     int d    = kv->cfg.head_dim;
     int seq  = kv->max_seq;
 
-    /* Point into the start of this layer's K data */
-    kv->k_view.data      = kv->k_data + (size_t)layer * n_kv * seq * d;
-    kv->k_view.ndim      = 3;
-    kv->k_view.shape[0]  = n_kv;
-    kv->k_view.shape[1]  = up_to_pos;
-    kv->k_view.shape[2]  = d;
-    kv->k_view.stride[0] = seq * d;   /* stride between heads */
-    kv->k_view.stride[1] = d;         /* stride between positions */
-    kv->k_view.stride[2] = 1;         /* stride between dims */
-    kv->k_view.dtype     = DTYPE_F32;
+    Tensor* view = &kv->k_views[layer];
+    view->data      = kv->k_data + (size_t)layer * n_kv * seq * d;
+    view->ndim      = 3;
+    view->shape[0]  = n_kv;
+    view->shape[1]  = up_to_pos;
+    view->shape[2]  = d;
+    view->stride[0] = seq * d;   /* stride between heads */
+    view->stride[1] = d;         /* stride between positions */
+    view->stride[2] = 1;         /* stride between dims */
+    view->dtype     = DTYPE_F32;
 
-    return &kv->k_view;
+    return view;
 }
 
 Tensor* kv_cache_get_v(KVCache* kv, int layer, int up_to_pos) {
     if (kv == NULL) return NULL;
+    if (layer < 0 || layer >= kv->cfg.n_layers) return NULL;
 
     int n_kv = kv->cfg.n_kv_heads;
     int d    = kv->cfg.head_dim;
     int seq  = kv->max_seq;
 
-    kv->v_view.data      = kv->v_data + (size_t)layer * n_kv * seq * d;
-    kv->v_view.ndim      = 3;
-    kv->v_view.shape[0]  = n_kv;
-    kv->v_view.shape[1]  = up_to_pos;
-    kv->v_view.shape[2]  = d;
-    kv->v_view.stride[0] = seq * d;
-    kv->v_view.stride[1] = d;
-    kv->v_view.stride[2] = 1;
-    kv->v_view.dtype     = DTYPE_F32;
+    Tensor* view = &kv->v_views[layer];
+    view->data      = kv->v_data + (size_t)layer * n_kv * seq * d;
+    view->ndim      = 3;
+    view->shape[0]  = n_kv;
+    view->shape[1]  = up_to_pos;
+    view->shape[2]  = d;
+    view->stride[0] = seq * d;
+    view->stride[1] = d;
+    view->stride[2] = 1;
+    view->dtype     = DTYPE_F32;
 
-    return &kv->v_view;
+    return view;
 }
 
 void kv_cache_destroy(KVCache* kv) {
