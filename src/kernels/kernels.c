@@ -8,67 +8,38 @@
 void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C) {
     int M = A->shape[0];
     int K = A->shape[1];
-    int N = B->shape[1];
+    /* B is stored as (out_features, in_features) which is (N, K) */
+    int N = B->shape[0];
     
     float* a_data = (float*)A->data;
     float* b_data = (float*)B->data;
     float* c_data = (float*)C->data;
 
-    memset(c_data, 0, (size_t)M * N * sizeof(float));
-
-    if (M == 1) {
-        // Matvec decode path optimization (M=1)
-        // A is [1xK], B is [KxN] -> C is [1xN]
-        // But his matmul expects w to be [N, K]. B is [K, N].
-        // So B is column-major if we want inner dot product, but it's row-major in memory.
-        // Let's just do a naive transpose-avoiding matvec or standard block matvec.
-        for (int k = 0; k < K; k++) {
-            float a_val = a_data[k];
-            int j = 0;
-            for (; j <= N - 8; j += 8) {
-                __m256 c_vec = _mm256_loadu_ps(&c_data[j]);
-                __m256 b_vec = _mm256_loadu_ps(&b_data[k * N + j]);
-                __m256 a_m256 = _mm256_set1_ps(a_val);
-                c_vec = _mm256_fmadd_ps(a_m256, b_vec, c_vec);
-                _mm256_storeu_ps(&c_data[j], c_vec);
+    // C(i, j) = dot(A[i, :], B[j, :])
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < N; j++) {
+            float sum = 0.0f;
+            int k = 0;
+            
+            // AVX2 vectorized dot product
+            __m256 sum_vec = _mm256_setzero_ps();
+            for (; k <= K - 8; k += 8) {
+                __m256 a_vec = _mm256_loadu_ps(&a_data[i * K + k]);
+                __m256 b_vec = _mm256_loadu_ps(&b_data[j * K + k]);
+                sum_vec = _mm256_fmadd_ps(a_vec, b_vec, sum_vec);
             }
-            for (; j < N; j++) {
-                c_data[j] += a_val * b_data[k * N + j];
+            
+            // Horizontal sum of the AVX2 accumulator
+            float temp[8];
+            _mm256_storeu_ps(temp, sum_vec);
+            sum += temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5] + temp[6] + temp[7];
+            
+            // Remainder loop
+            for (; k < K; k++) {
+                sum += a_data[i * K + k] * b_data[j * K + k];
             }
-        }
-        return;
-    }
-
-    // Standard block GEMM
-    int BM = 64, BN = 64, BK = 64;
-
-    for (int i0 = 0; i0 < M; i0 += BM) {
-        int imax = (i0 + BM > M) ? M : i0 + BM;
-        for (int j0 = 0; j0 < N; j0 += BN) {
-            int jmax = (j0 + BN > N) ? N : j0 + BN;
-            for (int k0 = 0; k0 < K; k0 += BK) {
-                int kmax = (k0 + BK > K) ? K : k0 + BK;
-
-                for (int i = i0; i < imax; i++) {
-                    int j = j0;
-                    for (; j <= jmax - 8; j += 8) {
-                        __m256 c_vec = _mm256_loadu_ps(&c_data[i * N + j]);
-                        for (int k = k0; k < kmax; k++) {
-                            __m256 a_vec = _mm256_set1_ps(a_data[i * K + k]);
-                            __m256 b_vec = _mm256_loadu_ps(&b_data[k * N + j]);
-                            c_vec = _mm256_fmadd_ps(a_vec, b_vec, c_vec);
-                        }
-                        _mm256_storeu_ps(&c_data[i * N + j], c_vec);
-                    }
-                    for (; j < jmax; j++) {
-                        float c_val = c_data[i * N + j];
-                        for (int k = k0; k < kmax; k++) {
-                            c_val += a_data[i * K + k] * b_data[k * N + j];
-                        }
-                        c_data[i * N + j] = c_val;
-                    }
-                }
-            }
+            
+            c_data[i * N + j] = sum;
         }
     }
 }

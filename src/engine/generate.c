@@ -62,7 +62,7 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     }
 
     /* Scratch for per-forward-pass temporaries — generous size */
-    size_t scratch_size = 256 * 1024 * 1024;  /* 256 MiB */
+    size_t scratch_size = 512 * 1024 * 1024;  /* 512 MiB for LLaMA 3.2 massive FF_DIMs */
     Scratch* scr = scratch_create(scratch_size);
     if (!scr) {
         fprintf(stderr, "Failed to create scratch (%zu bytes)\n", scratch_size);
@@ -81,7 +81,6 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
         return;
     }
 
-    /* ---- Tokenize prompt ---- */
     Tokenizer* tok = tokenizer_create(cfg);
     if (!tok) {
         fprintf(stderr, "Failed to create tokenizer\n");

@@ -1,0 +1,8 @@
+break gemm_f32
+commands
+  print A->shape
+  print B->shape
+  print C->shape
+  continue
+end
+run

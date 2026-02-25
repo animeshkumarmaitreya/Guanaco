@@ -59,17 +59,23 @@ int* tokenize(Tokenizer* tok, const char* text, int* out_len) {
             int vlen = (int)strlen(v);
             if (vlen == 0) continue;
             
-            /* Handle the special '_' character used by SentencePiece for space */
+            /* Handle special whitespace prefixes */
             int match = 1;
             int t_pos = pos;
             for (int k = 0; k < vlen; k++) {
                 if (t_pos >= len) { match = 0; break; }
                 char c = v[k];
+                /* SentencePiece U+2581 */
                 if ((unsigned char)c == 0xe2 && k+2 < vlen && (unsigned char)v[k+1] == 0x96 && (unsigned char)v[k+2] == 0x81) {
-                    /* U+2581 mapped to space */
                     if (text[t_pos] != ' ') { match = 0; break; }
                     k += 2;
-                } else if (c != text[t_pos]) {
+                } 
+                /* LLaMA 3 BPE Ġ */
+                else if ((unsigned char)c == 0xc4 && k+1 < vlen && (unsigned char)v[k+1] == 0xa0) {
+                    if (text[t_pos] != ' ') { match = 0; break; }
+                    k += 1;
+                }
+                else if (c != text[t_pos]) {
                     match = 0; break;
                 }
                 t_pos++;
@@ -97,15 +103,37 @@ const char* detokenize(Tokenizer* tok, int token_id) {
     if (token_id < 0 || token_id >= tok->vocab_size) return "";
     char* s = tok->vocab[token_id];
     if (!s) return "";
-    
-    /* Handle sentencepiece space ( U+2581 block ) */
+
+    /* Handle spaces:
+     * - SentencePiece uses U+2581 ( ) [0xe2, 0x96, 0x81]
+     * - LLaMA 3 BPE uses 'Ġ' (U+0120) [0xc4, 0xa0]
+     */
     static char buf[256];
     int j = 0;
     for (int i = 0; s[i] != '\0' && j < 255; i++) {
+        /* Old LLaMA SentencePiece */
         if ((unsigned char)s[i] == 0xe2 && (unsigned char)s[i+1] == 0x96 && (unsigned char)s[i+2] == 0x81) {
             buf[j++] = ' ';
             i += 2;
-        } else {
+        } 
+        /* LLaMA 3 BPE Byte Decoder */
+        else if ((unsigned char)s[i] == 0xc4) {
+            /* 0xC4 maps to base offsets for bytes 0-63 */
+            buf[j++] = (char)((unsigned char)s[i+1] - 0x80);
+            i += 1;
+        } 
+        else if ((unsigned char)s[i] == 0xc5) {
+            /* 0xC5 maps to base offsets for bytes 64-127 */
+            buf[j++] = (char)((unsigned char)s[i+1] - 0x80 + 64);
+            i += 1;
+        }
+        else if ((unsigned char)s[i] == 0xc3) {
+            /* 0xC3 maps to extended control mappings */
+            buf[j++] = (char)((unsigned char)s[i+1] + 64);
+            i += 1;
+        }
+        /* Fallback standard ASCII/UTF-8 passthrough */
+        else {
             buf[j++] = s[i];
         }
     }

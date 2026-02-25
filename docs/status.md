@@ -14,9 +14,14 @@ We used a strict interface contract (`types.h`). This means the Engine module kn
 
 ### What Runs Right Now?
 The engine currently processes **GGUF v2 and v3** binary files representing the **LLaMA** architecture.
-* **Supported Models**: Llama 1, Llama 2, Llama 3, TinyLlama, and Mistral (partial support, no sliding window attention yet).
+* **Supported Models**: Llama 1, Llama 2, **Llama 3, Llama 3.2 (1B/3B)**, TinyLlama, and Mistral (partial support, no sliding window attention yet).
 * **Required Data Type**: Pure `FP32` (32-bit float). *Note: The engine doesn't yet have decompression logic for shrinking quantized weights.*
-* **Features Included**: Grouped-Query Attention (GQA), RoPE positional encoding, RMSNorm, SwiGLU MLPs.
+* **Features Included**: 
+  * Grouped-Query Attention (GQA) — successfully handles transposed `(out_features, in_features)` GGUF `W_k` and `W_v` tensors vs PyTorch's native `nn.Linear` layout.
+  * RoPE positional encoding
+  * RMSNorm
+  * SwiGLU MLPs
+  * Tied Embeddings (seamlessly maps `token_embd` to `output.weight` when absent).
 
 **⚠️ Implementation Risk for New Models**: To support architectures like **Phi-3** or **Gemma**, you can't just load them. You would need to manually add their specific activation functions (e.g., GeLU) to `kernels.c` and map their unique tensor names in `loader.c`.
 
