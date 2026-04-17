@@ -77,6 +77,7 @@ Each person owns a coherent subsystem and ships tests from Day 1. Person D also 
 - **Extra debug asserts (DONE 2026-04-18):** added shape/dtype asserts in engine embedding lookup, KV cache append, and non-GEMM kernels.
 - **CLI plumbing (DONE 2026-04-18):** extend `CLIArgs` with `--device`, `--threads`, `--chat`; keep existing flags unchanged.
 - **Build switches (DONE 2026-04-18):** add `USE_CUDA ?= 0` and Makefile pthread wiring (via `USE_PTHREAD ?= 0`) so CUDA/threads work doesn’t fork the build system.
+- **MUST scaffolding + tests (DONE 2026-04-18):** add MUST-only stub folder layout (`src/backend/`, `src/kernels/cpu/`, `src/kernels/cuda/`, `src/threadpool/`) plus stub headers/sources for backend/quant/threadpool/chat/gpu-prefill/CUDA wrappers; wire new coverage tests into `make test` so the APIs stay buildable as real implementations land.
 
 ### 0.1) Agree on new/updated headers
 We will add one new header and minimally extend existing ones.
@@ -535,6 +536,22 @@ Add:
 For quantized Llama-3.1 models:
 - Validation oracle is llama.cpp greedy output for the same GGUF.
 - We only require that the **first N greedy tokens** match (N=8 or 16), to keep it lightweight.
+
+**Status (DONE 2026-04-18: scaffold-level coverage exists; correctness TODOs remain):**
+- The repo now contains stub-level tests wired into `make test` so MUST feature APIs are exercised early:
+  - `tests/test_quant.c` (contract/link coverage; real dequant+matvec golden tests pending)
+  - `tests/test_e2e_smoke.c` (placeholder; real GGUF-based greedy oracle test pending)
+  - `tests/test_backend.c` (backend abstraction coverage)
+  - `tests/test_threadpool.c` (threadpool API coverage; currently serial)
+  - `tests/test_chat_stub.c` (chat entrypoint stub coverage)
+  - `tests/test_gpu_prefill_stub.c` (GPU prefill hook stub coverage)
+
+**Remaining MUST validation suites (non-stub correctness):**
+- Quant Phase B: golden/oracle tests for Q8_0 + Q4_K dequant and matvec (block-accurate)
+- E2E smoke: TinyLlama greedy “next token id” oracle test from a real GGUF
+- GPU Phase A: CUDA prefill correctness parity vs CPU greedy (first few tokens)
+- Chat: scripted multi-turn test that asserts KV reuse + monotonic `current_pos`
+- Threads: run same path with `--threads 1` vs `--threads >1`, assert identical outputs
 
 ### Task D4: Integration
 - Ensure CLI selects backend and threads.

@@ -63,6 +63,21 @@ These are small, high-leverage changes that prevent later rework and unblock par
 - [x] Add authoritative tensor byte sizing: `Tensor.byte_size` + `tensor_nbytes()`, and populate/validate `byte_size` in the GGUF loader (block-aware for quant types). *(DONE 2026-04-18)*
 - [x] Fail fast on unsupported GGUF tensor dtypes (instead of silently treating unknown quant bytes as F32). *(DONE 2026-04-18)*
 
+6) **MUST feature scaffolding (project structure + stubs)**
+- [x] Add stub folder layout to keep CPU and CUDA codepaths separate:
+  - `src/backend/`
+  - `src/kernels/cpu/`
+  - `src/kernels/cuda/`
+  - `src/threadpool/`
+- [x] Add stub headers/sources for MUST features so work can proceed in parallel without build-system forks:
+  - Backend abstraction (`src/include/backend.h`, `src/backend/*`)
+  - Quant Phase B entrypoints (`src/include/quant.h`, `src/kernels/cpu/quant_matvec_*.c`)
+  - CPU threads scaffold (`src/include/threadpool.h`, `src/threadpool/threadpool.c`)
+  - GPU Phase A hook (`src/include/gpu_prefill.h`, `src/engine/gpu_prefill.c`) and CUDA wrapper skeleton (`src/kernels/cuda/*`)
+  - Chat REPL entrypoint (`src/include/chat.h`, `src/engine/chat.c`)
+  - Standard GEMM stub entrypoint (`src/include/kernels_ext.h`, `src/kernels/cpu/gemm_f32_nn.c`)
+  - Status: compiles in CPU-only builds; `make test` includes coverage tests. *(DONE 2026-04-18)*
+
 Only after the above are merged should the heavier work (CUDA/quant/threading/refactors) proceed.
 
 ---
@@ -420,15 +435,15 @@ Define this precisely in the CLI/engine contract:
 ## 8) Lightweight verification (MUST)
 
 ### 8.1 Unit tests (required)
-- Add `tests/test_quant.c`:
-  - Q8_0 dequant block test
-  - Q4_K dequant block test
-  - matvec sanity test on small synthetic matrices
+- [x] Add `tests/test_quant.c` (currently a stub-level linker/contract test; dequant + matvec correctness tests still pending). *(DONE 2026-04-18)*
+- [x] Add `tests/test_e2e_smoke.c` (currently a stub; will become a TinyLlama “next-token” oracle test once a reference GGUF is available in CI/dev env). *(DONE 2026-04-18)*
 
-- Add `tests/test_e2e_smoke.c`:
-  - loads TinyLlama GGUF
-  - runs greedy next token for a fixed prompt
-  - asserts expected token id
+- [x] Add MUST scaffolding coverage tests so `make test` exercises new APIs early:
+  - `tests/test_backend.c` (backend create + CPU vtable calls)
+  - `tests/test_threadpool.c` (threadpool API correctness; currently serial)
+  - `tests/test_chat_stub.c` (chat entrypoint returns non-zero until implemented)
+  - `tests/test_gpu_prefill_stub.c` (GPU prefill hook returns non-zero until implemented)
+  - Status: wired into `make test`. *(DONE 2026-04-18)*
 
 ### 8.2 Oracles
 - For FP32/TinyLlama: existing `golden_data/gen_golden.py` as optional deeper validation.
@@ -447,6 +462,30 @@ Make these verifiable with concrete commands (update as CLI evolves):
 - CPU quant run (Llama-3.1 8B Q4_K): `./build/llmrt --model /path/to/model.gguf --prompt "Hello" --max-tokens 8 --temperature 0`
 - Thread scaling check (CPU): run the same command with `--threads 1` and `--threads 4` and confirm wall-time decreases for prompt lengths where prefill dominates.
 - GPU prefill smoke (small float model): `make USE_CUDA=1` then run with `--device cuda` and a prompt long enough to trigger prefill work.
+
+### 8.4 Remaining MUST validation work (explicit TODO)
+
+Backend selection:
+- Add runtime tests that exercise `--device auto|cpu|cuda` end-to-end once backend wiring lands (including “cuda requested but unavailable” behavior).
+
+Quant Phase B correctness:
+- Replace `tests/test_quant.c` stub with real tests:
+  - Q8_0 block dequant golden test
+  - Q4_K `scales/min` unpack helper golden test
+  - Q4_K full 144-byte super-block dequant golden test
+  - matvec sanity tests (small synthetic matrices) + bounds checks using `Tensor.byte_size`
+
+E2E smoke:
+- Replace `tests/test_e2e_smoke.c` stub with a TinyLlama “greedy next token id” assertion test (dev-provided GGUF path or small checked-in fixture if feasible).
+
+Chat:
+- Add a lightweight non-interactive test that calls the chat loop logic with scripted inputs and asserts `current_pos` monotonicity + KV reuse (once chat REPL is implemented).
+
+Threads:
+- Add a correctness test that runs the same GEMM path with `--threads 1` vs `--threads >1` and asserts identical outputs (once threaded GEMM lands).
+
+GPU Phase A:
+- Add a correctness smoke test for GPU prefill on a small float model: GPU prefill + CPU decode must match CPU-only greedy token ids for the first few tokens.
 
 ---
 

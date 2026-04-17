@@ -209,6 +209,22 @@ static void test_cli_full(void) {
     PASS("cli_full");
 }
 
+static void test_cli_device_cuda_errors(void) {
+    char* argv[] = {"main", "--model", "test.gguf", "--device", "cuda"};
+    CLIArgs args;
+    int result = cli_parse(5, argv, &args);
+    if (result == -1) PASS("cli_device_cuda_errors");
+    else              FAIL("cli_device_cuda_errors", "expected error for --device cuda (not implemented yet)");
+}
+
+static void test_cli_chat_errors(void) {
+    char* argv[] = {"main", "--model", "test.gguf", "--chat"};
+    CLIArgs args;
+    int result = cli_parse(4, argv, &args);
+    if (result == -1) PASS("cli_chat_errors");
+    else              FAIL("cli_chat_errors", "expected error for --chat (not implemented yet)");
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -230,6 +246,8 @@ int main(void) {
     test_cli_help();
     test_cli_missing_model();
     test_cli_full();
+    test_cli_device_cuda_errors();
+    test_cli_chat_errors();
 
     printf("\n");
     if (failures == 0) {
