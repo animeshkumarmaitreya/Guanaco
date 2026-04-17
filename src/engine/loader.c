@@ -122,6 +122,25 @@ static size_t ggml_type_size(int ggml_type) {
     }
 }
 
+static size_t ggml_tensor_nbytes(uint32_t ggml_type, const uint64_t* dims, int ndims) {
+    if (ndims <= 0) return 0;
+    int blck = ggml_block_size((int)ggml_type);
+    size_t tsize = ggml_type_size((int)ggml_type);
+    if (blck <= 0 || tsize == 0) return 0;
+
+    /* GGUF/ggml dims: dims[0] is the fastest-changing dimension (ne0).
+     * Quantization blocks are along ne0. */
+    uint64_t ne0 = dims[0];
+    uint64_t blocks0 = (ne0 + (uint64_t)blck - 1ULL) / (uint64_t)blck;
+    size_t row_bytes = (size_t)blocks0 * tsize;
+
+    uint64_t rows = 1;
+    for (int d = 1; d < ndims; d++) {
+        rows *= dims[d];
+    }
+    return row_bytes * (size_t)rows;
+}
+
 /* Convert ggml_type to our DataType enum */
 static DataType ggml_to_dtype(int ggml_type) {
     switch (ggml_type) {
@@ -129,7 +148,8 @@ static DataType ggml_to_dtype(int ggml_type) {
         case GGML_TYPE_F16:  return DTYPE_F16;
         case GGML_TYPE_Q8_0: return DTYPE_Q8_0;
         case GGML_TYPE_Q4_0: return DTYPE_Q4_0;
-        default:             return DTYPE_F32;  /* fallback */
+        case GGML_TYPE_Q4_K: return DTYPE_Q4_K;
+        default:             return DTYPE_UNKNOWN;
     }
 }
 
@@ -303,6 +323,9 @@ ModelWeights* load_model(const char* path, Arena* arena) {
 
     /* ---- Parse metadata — extract model config values ---- */
     ModelConfig cfg = {0};
+    /* Preserve prior runtime behavior if GGUF does not specify these. */
+    cfg.bos_token_id = 1;
+    cfg.eos_token_id = 2;
     uint32_t alignment = GGUF_DEFAULT_ALIGNMENT;
 
     for (uint64_t i = 0; i < kv_count; i++) {
@@ -330,6 +353,10 @@ ModelWeights* load_model(const char* path, Arena* arena) {
                 cfg.max_seq_len = val;
             else if (strcmp(key.str, "general.alignment") == 0)
                 alignment = (uint32_t)val;
+            else if (strcmp(key.str, "tokenizer.ggml.bos_token_id") == 0)
+                cfg.bos_token_id = val;
+            else if (strcmp(key.str, "tokenizer.ggml.eos_token_id") == 0)
+                cfg.eos_token_id = val;
             /* else: skip — we don't need this KV */
         }
         else if (vtype == GGUF_TYPE_ARRAY && strcmp(key.str, "tokenizer.ggml.tokens") == 0) {
@@ -377,6 +404,10 @@ ModelWeights* load_model(const char* path, Arena* arena) {
                     cfg.ff_dim = (int)val;
                 else if (strcmp(key.str, "llama.context_length") == 0)
                     cfg.max_seq_len = (int)val;
+                else if (strcmp(key.str, "tokenizer.ggml.bos_token_id") == 0)
+                    cfg.bos_token_id = (int)val;
+                else if (strcmp(key.str, "tokenizer.ggml.eos_token_id") == 0)
+                    cfg.eos_token_id = (int)val;
             } else {
                 skip_metadata_value(&r, vtype);
             }
@@ -386,12 +417,13 @@ ModelWeights* load_model(const char* path, Arena* arena) {
     }
 
     /* Derive head_dim and vocab_size (vocab_size from token_embedding shape) */
-    if (cfg.n_heads > 0)
+    if (cfg.n_heads > 0) {
         cfg.head_dim = cfg.hidden_dim / cfg.n_heads;
+    }
 
-    printf("Model config: H=%d, heads=%d, kv_heads=%d, head_dim=%d, layers=%d, ff=%d, ctx=%d\n",
+    printf("Model config: H=%d, heads=%d, kv_heads=%d, head_dim=%d, layers=%d, ff=%d, ctx=%d, bos=%d, eos=%d\n",
            cfg.hidden_dim, cfg.n_heads, cfg.n_kv_heads, cfg.head_dim,
-           cfg.n_layers, cfg.ff_dim, cfg.max_seq_len);
+           cfg.n_layers, cfg.ff_dim, cfg.max_seq_len, cfg.bos_token_id, cfg.eos_token_id);
 
     /* ---- Parse tensor info ---- */
     TensorInfo* tensor_infos = (TensorInfo*)calloc(tensor_count, sizeof(TensorInfo));
@@ -441,11 +473,31 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         /* Compute the pointer into mmap'd data */
         void* tdata = (uint8_t*)file_data + data_start + ti->offset;
 
+        size_t tbytes = ggml_tensor_nbytes(ti->ggml_type, ti->dims, ti->ndims);
+        if (tbytes == 0) {
+            fprintf(stderr, "load_model: unsupported ggml_type=%u for tensor '%s'\n",
+                ti->ggml_type, ti->name);
+            goto fail_model;
+        }
+        if (data_start + (size_t)ti->offset + tbytes > file_size) {
+            fprintf(stderr, "load_model: tensor '%s' overruns file (offset=%lu, bytes=%zu)\n",
+                ti->name, (unsigned long)ti->offset, tbytes);
+            goto fail_model;
+        }
+
         /* Allocate a Tensor struct */
         Tensor* t = (Tensor*)calloc(1, sizeof(Tensor));
         t->data = tdata;
         t->dtype = ggml_to_dtype(ti->ggml_type);
         t->ndim = ti->ndims;
+        t->byte_size = tbytes;
+
+        if (t->dtype == DTYPE_UNKNOWN) {
+            fprintf(stderr, "load_model: unsupported dtype for tensor '%s' (ggml_type=%u)\n",
+                ti->name, ti->ggml_type);
+            free(t);
+            goto fail_model;
+        }
 
         /* GGUF dimensions are stored in ggml order (row-major, first dim varies fastest).
          * For a weight matrix (out_features, in_features) in PyTorch:
@@ -542,12 +594,30 @@ ModelWeights* load_model(const char* path, Arena* arena) {
             fprintf(stderr, "Warning: layer %d missing attention weights\n", l);
             valid = 0;
         }
+        if ((lw->wq && lw->wq->dtype != DTYPE_F32) ||
+            (lw->wk && lw->wk->dtype != DTYPE_F32) ||
+            (lw->wv && lw->wv->dtype != DTYPE_F32) ||
+            (lw->wo && lw->wo->dtype != DTYPE_F32)) {
+            fprintf(stderr, "Error: layer %d has non-F32 attention weights (not supported yet)\n", l);
+            valid = 0;
+        }
         if (!lw->w_gate || !lw->w_up || !lw->w_down) {
             fprintf(stderr, "Warning: layer %d missing MLP weights\n", l);
             valid = 0;
         }
+        if ((lw->w_gate && lw->w_gate->dtype != DTYPE_F32) ||
+            (lw->w_up && lw->w_up->dtype != DTYPE_F32) ||
+            (lw->w_down && lw->w_down->dtype != DTYPE_F32)) {
+            fprintf(stderr, "Error: layer %d has non-F32 MLP weights (not supported yet)\n", l);
+            valid = 0;
+        }
         if (!lw->rms_att || !lw->rms_ffn) {
             fprintf(stderr, "Warning: layer %d missing norm weights\n", l);
+            valid = 0;
+        }
+        if ((lw->rms_att && lw->rms_att->dtype != DTYPE_F32) ||
+            (lw->rms_ffn && lw->rms_ffn->dtype != DTYPE_F32)) {
+            fprintf(stderr, "Error: layer %d has non-F32 norm weights (not supported yet)\n", l);
             valid = 0;
         }
     }
@@ -555,9 +625,26 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         fprintf(stderr, "Warning: missing embedding weights\n");
         valid = 0;
     }
+    if (model->embedding && model->embedding->dtype != DTYPE_F32) {
+        fprintf(stderr, "Error: embedding is non-F32 (not supported yet)\n");
+        valid = 0;
+    }
     if (!model->rms_final) {
         fprintf(stderr, "Warning: missing final norm weights\n");
         valid = 0;
+    }
+    if (model->rms_final && model->rms_final->dtype != DTYPE_F32) {
+        fprintf(stderr, "Error: final norm is non-F32 (not supported yet)\n");
+        valid = 0;
+    }
+    if (model->lm_head && model->lm_head->dtype != DTYPE_F32) {
+        fprintf(stderr, "Error: lm_head is non-F32 (not supported yet)\n");
+        valid = 0;
+    }
+
+    if (!valid) {
+        fprintf(stderr, "load_model: model contains unsupported tensor dtypes; this runtime currently supports F32 weights only\n");
+        goto fail_model;
     }
 
     if (valid) {

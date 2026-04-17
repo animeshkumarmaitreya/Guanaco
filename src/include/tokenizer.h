@@ -11,8 +11,6 @@
 
 typedef struct Tokenizer Tokenizer;
 
-#include "engine.h"
-
 /* Load tokenizer vocabulary from the model configuration array.
  * Returns NULL on failure. */
 Tokenizer* tokenizer_create(const ModelConfig* cfg);
@@ -21,6 +19,12 @@ Tokenizer* tokenizer_create(const ModelConfig* cfg);
  * Returns malloc'd array of token IDs. Caller must free().
  * *out_len is set to the number of tokens. */
 int* tokenize(Tokenizer* tok, const char* text, int* out_len);
+
+/* Encode UTF-8 text into token IDs, without injecting BOS.
+ * Intended for incremental chat turns where BOS must not be re-added.
+ * Returns malloc'd array of token IDs. Caller must free().
+ * *out_len is set to the number of tokens. */
+int* tokenize_no_bos(Tokenizer* tok, const char* text, int* out_len);
 
 /* Decode a single token ID to its string representation.
  * Returns pointer to internal buffer — do NOT free. Valid until next call. */
@@ -46,6 +50,12 @@ int sample_top_p(const float* logits, int vocab_size, float p, float temperature
 
 /* ---- CLI ---- */
 
+typedef enum {
+    DEVICE_AUTO = 0,
+    DEVICE_CPU  = 1,
+    DEVICE_CUDA = 2,
+} DeviceKind;
+
 typedef struct {
     const char* model_path;
     const char* prompt;
@@ -53,6 +63,11 @@ typedef struct {
     float       temperature;
     int         top_k;
     float       top_p;
+
+    /* Pre-flight scaffolding: used by later backend/chat/thread work. */
+    DeviceKind  device;
+    int         threads;
+    int         chat;
 } CLIArgs;
 
 /* Parse command-line arguments. Returns 0 on success, -1 on error.

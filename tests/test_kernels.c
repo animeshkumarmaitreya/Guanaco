@@ -54,14 +54,15 @@ static Tensor make_tensor_1d(float* data, int d0) {
 
 static void test_gemm_small(void) {
     if (STUB_MODE) { SKIP("gemm_small"); return; }
-    /* 2x3 × 3x2 = 2x2 */
+    /* gemm_f32 computes C = A(2x3) × B(2x3)^T = C(2x2)
+     * i.e., C(i,j) = dot(A[i,:], B[j,:]) */
     float a[] = {1,2,3, 4,5,6};
-    float b[] = {7,8, 9,10, 11,12};
+    float b[] = {7,8,9, 10,11,12};
     float c[4] = {0};
-    float expected[] = {58, 64, 139, 154};
+    float expected[] = {50, 68, 122, 167};
 
     Tensor A = make_tensor(a, 2, 3);
-    Tensor B = make_tensor(b, 3, 2);
+    Tensor B = make_tensor(b, 2, 3);
     Tensor C = make_tensor(c, 2, 2);
 
     gemm_f32(&A, &B, &C);
@@ -77,7 +78,8 @@ static void test_gemm_small(void) {
 
 static void test_gemm_matvec(void) {
     if (STUB_MODE) { SKIP("gemm_matvec"); return; }
-    /* 1xK × KxN — the decode hot-path shape */
+    /* gemm_f32 computes C = A(1xK) × B(NxK)^T = C(1xN)
+     * i.e., each output is a dot-product against one row of B */
     int K = 64, N = 64;
     float* a = (float*)calloc(K, sizeof(float));
     float* b = (float*)calloc(K * N, sizeof(float));
@@ -88,16 +90,16 @@ static void test_gemm_matvec(void) {
     for (int i = 0; i < K; i++) a[i] = (float)(rand() % 100) / 100.0f;
     for (int i = 0; i < K * N; i++) b[i] = (float)(rand() % 100) / 100.0f;
 
-    /* Reference: naive triple-loop */
+    /* Reference: ref[j] = dot(a[:], b_row_j[:]) */
     for (int j = 0; j < N; j++) {
         ref[j] = 0;
         for (int k = 0; k < K; k++) {
-            ref[j] += a[k] * b[k * N + j];
+            ref[j] += a[k] * b[j * K + k];
         }
     }
 
     Tensor A = make_tensor(a, 1, K);
-    Tensor B = make_tensor(b, K, N);
+    Tensor B = make_tensor(b, N, K);
     Tensor C = make_tensor(c, 1, N);
     gemm_f32(&A, &B, &C);
 

@@ -46,6 +46,7 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     printf("Model loaded in %.1f ms\n", load_time);
 
     ModelConfig* cfg = &model->config;
+    const int eos_token_id = (cfg->eos_token_id > 0) ? cfg->eos_token_id : 2;
 
     /* ---- Create allocators ---- */
     /* Arena for KV cache — size calculation:
@@ -169,8 +170,8 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
 
         tokens_generated++;
 
-        /* Check for EOS token (token ID 2 for LLaMA family) */
-        if (next_token == 2) {
+        /* Check for EOS token (from GGUF; fallback preserves prior behavior) */
+        if (next_token == eos_token_id) {
             printf("\n");
             break;
         }

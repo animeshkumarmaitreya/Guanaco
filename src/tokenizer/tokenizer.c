@@ -15,7 +15,19 @@ struct Tokenizer {
     int vocab_size;
     char** vocab;
     float* scores;
+    int bos_token_id;
 };
+
+typedef struct {
+    int idx;
+    float logit;
+} LogitIndex;
+
+static int logit_index_cmp_desc(const void* a, const void* b) {
+    float va = ((const LogitIndex*)a)->logit;
+    float vb = ((const LogitIndex*)b)->logit;
+    return (va < vb) ? 1 : (va > vb) ? -1 : 0;
+}
 
 Tokenizer* tokenizer_create(const ModelConfig* cfg) {
     if (!cfg || !cfg->vocab_strings) return NULL;
@@ -24,80 +36,91 @@ Tokenizer* tokenizer_create(const ModelConfig* cfg) {
     tok->vocab_size = cfg->vocab_size;
     tok->vocab = cfg->vocab_strings;
     tok->scores = cfg->vocab_scores;
+    tok->bos_token_id = (cfg->bos_token_id > 0) ? cfg->bos_token_id : 1;
     return tok;
 }
+
+    static int* tokenize_impl(Tokenizer* tok, const char* text, int add_bos, int* out_len) {
+        if (!text || text[0] == '\0') {
+            *out_len = 0;
+            return NULL;
+        }
+
+        /* For Llama, text usually gets a space prepended (" ") mapped to U+2581 "_" */
+        /* We'll do a very basic eager greedy matching for brevity in this engine,
+           rather than strict BPE, just to ensure it's functional.
+           A true BPE splits to chars, finds best merge pairs iteratively. */
+
+        int len = (int)strlen(text);
+        int* ids = (int*)malloc((len + 2) * sizeof(int));
+        int n_tokens = 0;
+
+        if (add_bos) {
+            /* Add BOS token (from GGUF; fallback preserves prior behavior) */
+            ids[n_tokens++] = tok->bos_token_id;
+        }
+
+        /* Very naive longest-prefix match tokenizer (not true BPE, but works decently) */
+        int pos = 0;
+        while (pos < len) {
+            int best_id = -1;
+            int best_len = 0;
+
+            for (int i = 0; i < tok->vocab_size; i++) {
+                char* v = tok->vocab[i];
+                if (!v) continue;
+                int vlen = (int)strlen(v);
+                if (vlen == 0) continue;
+
+                /* Handle special whitespace prefixes */
+                int match = 1;
+                int t_pos = pos;
+                for (int k = 0; k < vlen; k++) {
+                    if (t_pos >= len) { match = 0; break; }
+                    char c = v[k];
+                    /* SentencePiece U+2581 */
+                    if ((unsigned char)c == 0xe2 && k+2 < vlen && (unsigned char)v[k+1] == 0x96 && (unsigned char)v[k+2] == 0x81) {
+                        if (text[t_pos] != ' ') { match = 0; break; }
+                        k += 2;
+                    }
+                    /* LLaMA 3 BPE Ġ */
+                    else if ((unsigned char)c == 0xc4 && k+1 < vlen && (unsigned char)v[k+1] == 0xa0) {
+                        if (text[t_pos] != ' ') { match = 0; break; }
+                        k += 1;
+                    }
+                    else if (c != text[t_pos]) {
+                        match = 0; break;
+                    }
+                    t_pos++;
+                }
+                if (match && (t_pos - pos) > best_len) {
+                    best_len = t_pos - pos;
+                    best_id = i;
+                }
+            }
+
+            if (best_id != -1) {
+                ids[n_tokens++] = best_id;
+                pos += best_len;
+            } else {
+                /* Fallback to unknown byte */
+                pos++;
+            }
+        }
+
+        *out_len = n_tokens;
+        return ids;
+    }
 
 
 
 int* tokenize(Tokenizer* tok, const char* text, int* out_len) {
-    if (!text || text[0] == '\0') {
-        *out_len = 0;
-        return NULL;
-    }
-
-    /* For Llama, text usually gets a space prepended (" ") mapped to U+2581 "_" */
-    /* We'll do a very basic eager greedy matching for brevity in this engine, 
-       rather than strict BPE, just to ensure it's functional. 
-       A true BPE splits to chars, finds best merge pairs iteratively. */
-    
-    int len = (int)strlen(text);
-    int* ids = (int*)malloc((len + 2) * sizeof(int));
-    int n_tokens = 0;
-
-    /* Add BOS token (1 for Llama) */
-    ids[n_tokens++] = 1;
-
-    /* Very naive longest-prefix match tokenizer (not true BPE, but works decently) */
-    int pos = 0;
-    while (pos < len) {
-        int best_id = -1;
-        int best_len = 0;
-        
-        for (int i = 0; i < tok->vocab_size; i++) {
-            char* v = tok->vocab[i];
-            if (!v) continue;
-            int vlen = (int)strlen(v);
-            if (vlen == 0) continue;
-            
-            /* Handle special whitespace prefixes */
-            int match = 1;
-            int t_pos = pos;
-            for (int k = 0; k < vlen; k++) {
-                if (t_pos >= len) { match = 0; break; }
-                char c = v[k];
-                /* SentencePiece U+2581 */
-                if ((unsigned char)c == 0xe2 && k+2 < vlen && (unsigned char)v[k+1] == 0x96 && (unsigned char)v[k+2] == 0x81) {
-                    if (text[t_pos] != ' ') { match = 0; break; }
-                    k += 2;
-                } 
-                /* LLaMA 3 BPE Ġ */
-                else if ((unsigned char)c == 0xc4 && k+1 < vlen && (unsigned char)v[k+1] == 0xa0) {
-                    if (text[t_pos] != ' ') { match = 0; break; }
-                    k += 1;
-                }
-                else if (c != text[t_pos]) {
-                    match = 0; break;
-                }
-                t_pos++;
-            }
-            if (match && (t_pos - pos) > best_len) {
-                best_len = t_pos - pos;
-                best_id = i;
-            }
-        }
-        
-        if (best_id != -1) {
-            ids[n_tokens++] = best_id;
-            pos += best_len;
-        } else {
-            /* Fallback to unknown byte */
-            pos++;
-        }
-    }
-
-    *out_len = n_tokens;
-    return ids;
+        return tokenize_impl(tok, text, 1, out_len);
 }
+
+    int* tokenize_no_bos(Tokenizer* tok, const char* text, int* out_len) {
+        return tokenize_impl(tok, text, 0, out_len);
+    }
 
 const char* detokenize(Tokenizer* tok, int token_id) {
     if (token_id < 0 || token_id >= tok->vocab_size) return "";
@@ -191,16 +214,131 @@ int sample_temperature(const float* logits, int vocab_size, float temperature) {
 }
 
 int sample_top_k(const float* logits, int vocab_size, int k, float temperature) {
-    (void)k; /* Full top_k requires sorting, fallback to temp for simplicity here */
-    return sample_temperature(logits, vocab_size, temperature);
+    if (vocab_size <= 0) return 0;
+    if (temperature <= 0.0f) return sample_greedy(logits, vocab_size);
+    if (k <= 0 || k >= vocab_size) return sample_temperature(logits, vocab_size, temperature);
+
+    /* Track top-k logits without sorting the entire vocabulary. */
+    int* top_idx = (int*)malloc((size_t)k * sizeof(int));
+    float* top_val = (float*)malloc((size_t)k * sizeof(float));
+    if (!top_idx || !top_val) {
+        free(top_idx);
+        free(top_val);
+        return sample_temperature(logits, vocab_size, temperature);
+    }
+
+    int count = 0;
+    for (int i = 0; i < vocab_size; i++) {
+        float v = logits[i];
+        if (count < k) {
+            top_idx[count] = i;
+            top_val[count] = v;
+            count++;
+            continue;
+        }
+
+        int min_j = 0;
+        float min_v = top_val[0];
+        for (int j = 1; j < k; j++) {
+            if (top_val[j] < min_v) { min_v = top_val[j]; min_j = j; }
+        }
+        if (v > min_v) {
+            top_idx[min_j] = i;
+            top_val[min_j] = v;
+        }
+    }
+
+    /* Sample from the top-k set using temperature-softmax. */
+    float max_val = top_val[0];
+    for (int j = 1; j < k; j++) if (top_val[j] > max_val) max_val = top_val[j];
+
+    float sum = 0.0f;
+    float* probs = (float*)malloc((size_t)k * sizeof(float));
+    if (!probs) {
+        free(top_idx);
+        free(top_val);
+        return sample_temperature(logits, vocab_size, temperature);
+    }
+
+    for (int j = 0; j < k; j++) {
+        probs[j] = expf((top_val[j] - max_val) / temperature);
+        sum += probs[j];
+    }
+
+    float r = ((float)rand() / (float)RAND_MAX) * sum;
+    float acc = 0.0f;
+    int picked_j = k - 1;
+    for (int j = 0; j < k; j++) {
+        acc += probs[j];
+        if (r <= acc) { picked_j = j; break; }
+    }
+
+    int picked = top_idx[picked_j];
+
+    free(probs);
+    free(top_idx);
+    free(top_val);
+    return picked;
 }
 
 int sample_top_p(const float* logits, int vocab_size, float p, float temperature) {
-    (void)p; /* Full top_p requires sorting, fallback to temp for simplicity here */
-    return sample_temperature(logits, vocab_size, temperature);
+    if (vocab_size <= 0) return 0;
+    if (temperature <= 0.0f) return sample_greedy(logits, vocab_size);
+    if (p >= 1.0f) return sample_temperature(logits, vocab_size, temperature);
+    if (p <= 0.0f) return sample_greedy(logits, vocab_size);
+
+    LogitIndex* arr = (LogitIndex*)malloc((size_t)vocab_size * sizeof(LogitIndex));
+    if (!arr) return sample_temperature(logits, vocab_size, temperature);
+    for (int i = 0; i < vocab_size; i++) {
+        arr[i].idx = i;
+        arr[i].logit = logits[i];
+    }
+
+    qsort(arr, (size_t)vocab_size, sizeof(LogitIndex), logit_index_cmp_desc);
+
+    float max_val = arr[0].logit;
+    double sum_total = 0.0;
+    for (int i = 0; i < vocab_size; i++) {
+        sum_total += (double)expf((arr[i].logit - max_val) / temperature);
+    }
+
+    double cum = 0.0;
+    int cutoff = 0;
+    for (int i = 0; i < vocab_size; i++) {
+        double w = (double)expf((arr[i].logit - max_val) / temperature);
+        cum += w / sum_total;
+        cutoff++;
+        if (cum >= (double)p) break;
+    }
+    if (cutoff < 1) cutoff = 1;
+
+    double sum_cut = 0.0;
+    for (int i = 0; i < cutoff; i++) {
+        sum_cut += (double)expf((arr[i].logit - max_val) / temperature);
+    }
+
+    double r = ((double)rand() / (double)RAND_MAX) * sum_cut;
+    double acc = 0.0;
+    int picked_i = cutoff - 1;
+    for (int i = 0; i < cutoff; i++) {
+        acc += (double)expf((arr[i].logit - max_val) / temperature);
+        if (r <= acc) { picked_i = i; break; }
+    }
+
+    int picked = arr[picked_i].idx;
+    free(arr);
+    return picked;
 }
 
 /* ---- CLI ---- */
+
+static DeviceKind parse_device_kind(const char* s) {
+    if (!s) return DEVICE_AUTO;
+    if (strcmp(s, "auto") == 0) return DEVICE_AUTO;
+    if (strcmp(s, "cpu") == 0) return DEVICE_CPU;
+    if (strcmp(s, "cuda") == 0) return DEVICE_CUDA;
+    return DEVICE_AUTO;
+}
 
 int cli_parse(int argc, char** argv, CLIArgs* args) {
     args->model_path  = NULL;
@@ -209,6 +347,9 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
     args->temperature = 0.7f;
     args->top_k       = 40;
     args->top_p       = 0.9f;
+    args->device      = DEVICE_AUTO;
+    args->threads     = 1;
+    args->chat        = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -217,6 +358,11 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
             printf("  --prompt <text>       Input prompt\n");
             printf("  --max-tokens <N>      Max tokens to generate (default: 128)\n");
             printf("  --temperature <float> Sampling temperature (default: 0.7)\n");
+            printf("  --top-k <N>           Top-k sampling (default: 40; 0 disables)\n");
+            printf("  --top-p <p>           Top-p sampling (default: 0.9; 1 disables)\n");
+            printf("  --device <kind>       Device: auto|cpu|cuda (default: auto)\n");
+            printf("  --threads <N>         CPU threads (default: 1)\n");
+            printf("  --chat                Chat REPL mode\n");
             return 1;
         }
         else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) args->model_path = argv[++i];
@@ -225,6 +371,43 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
         else if (strcmp(argv[i], "--temperature") == 0 && i + 1 < argc) args->temperature = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--top-k") == 0 && i + 1 < argc) args->top_k = atoi(argv[++i]);
         else if (strcmp(argv[i], "--top-p") == 0 && i + 1 < argc) args->top_p = (float)atof(argv[++i]);
+        else if (strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
+            const char* kind = argv[++i];
+            args->device = parse_device_kind(kind);
+            if (strcmp(kind, "auto") != 0 && strcmp(kind, "cpu") != 0 && strcmp(kind, "cuda") != 0) {
+                fprintf(stderr, "Error: invalid --device '%s' (expected auto|cpu|cuda)\n", kind);
+                return -1;
+            }
+        }
+        else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
+            args->threads = atoi(argv[++i]);
+            if (args->threads < 1) {
+                fprintf(stderr, "Error: --threads must be >= 1\n");
+                return -1;
+            }
+        }
+        else if (strcmp(argv[i], "--chat") == 0) {
+            args->chat = 1;
+        }
+        else {
+            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+            return -1;
+        }
+    }
+
+    if (args->chat) {
+        fprintf(stderr, "Error: --chat is not implemented yet\n");
+        return -1;
+    }
+
+    if (args->device == DEVICE_CUDA) {
+#if !defined(USE_CUDA) || (USE_CUDA == 0)
+        fprintf(stderr, "Error: --device cuda requested but CUDA is not enabled in this build (try: make USE_CUDA=1)\n");
+        return -1;
+#else
+        fprintf(stderr, "Error: --device cuda requested but CUDA backend is not implemented yet\n");
+        return -1;
+#endif
     }
 
     if (!args->model_path) {

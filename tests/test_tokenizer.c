@@ -67,6 +67,20 @@ static void test_temperature_deterministic(void) {
     else               FAIL("temp_deterministic", "expected index 1 almost always");
 }
 
+static void test_topk_temp_zero_is_greedy(void) {
+    float logits[] = {1.0f, 5.0f, 2.0f, 3.0f};
+    int result = sample_top_k(logits, 4, 2, 0.0f);
+    if (result == 1) PASS("topk_temp_zero_is_greedy");
+    else             FAIL("topk_temp_zero_is_greedy", "expected argmax index 1");
+}
+
+static void test_topp_temp_zero_is_greedy(void) {
+    float logits[] = {1.0f, 5.0f, 2.0f, 3.0f};
+    int result = sample_top_p(logits, 4, 0.9f, 0.0f);
+    if (result == 1) PASS("topp_temp_zero_is_greedy");
+    else             FAIL("topp_temp_zero_is_greedy", "expected argmax index 1");
+}
+
 /* ---- Tokenizer tests ---- */
 
 static void test_tokenizer_create(void) {
@@ -115,6 +129,35 @@ static void test_tokenizer_empty(void) {
         FAIL("tokenizer_empty", "expected 0 tokens for empty string");
     }
     free(ids);
+    tokenizer_destroy(tok);
+}
+
+static void test_tokenizer_no_bos(void) {
+    char* dummy[3] = {"H", "<BOS>", "Hello"};
+    ModelConfig cfg = { .vocab_size = 3, .vocab_strings = dummy, .bos_token_id = 1 };
+    Tokenizer* tok = tokenizer_create(&cfg);
+    if (!tok) { FAIL("tokenizer_no_bos", "create failed"); return; }
+
+    int len_bos = 0;
+    int* ids_bos = tokenize(tok, "Hello", &len_bos);
+
+    int len_no_bos = 0;
+    int* ids_no_bos = tokenize_no_bos(tok, "Hello", &len_no_bos);
+
+    if (!ids_bos || !ids_no_bos) {
+        FAIL("tokenizer_no_bos", "tokenize returned NULL");
+    } else if (len_bos != len_no_bos + 1) {
+        FAIL("tokenizer_no_bos", "expected tokenize() to add exactly one BOS token");
+    } else if (ids_bos[0] != cfg.bos_token_id) {
+        FAIL("tokenizer_no_bos", "expected first token to be BOS");
+    } else if (ids_no_bos[0] == cfg.bos_token_id) {
+        FAIL("tokenizer_no_bos", "expected tokenize_no_bos() to not inject BOS");
+    } else {
+        PASS("tokenizer_no_bos");
+    }
+
+    free(ids_bos);
+    free(ids_no_bos);
     tokenizer_destroy(tok);
 }
 
@@ -177,9 +220,12 @@ int main(void) {
     test_greedy_single();
     test_temperature_zero();
     test_temperature_deterministic();
+    test_topk_temp_zero_is_greedy();
+    test_topp_temp_zero_is_greedy();
     test_tokenizer_create();
     test_tokenizer_basic();
     test_tokenizer_empty();
+    test_tokenizer_no_bos();
     test_detokenize();
     test_cli_help();
     test_cli_missing_model();

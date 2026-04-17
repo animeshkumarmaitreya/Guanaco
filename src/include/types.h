@@ -18,6 +18,8 @@ typedef enum {
     DTYPE_F16   = 1,
     DTYPE_Q8_0  = 2,
     DTYPE_Q4_0  = 3,
+    DTYPE_Q4_K  = 4,
+    DTYPE_UNKNOWN = 99,
 } DataType;
 
 /* Returns bytes per element for a given dtype (for F32/F16 only; quantized types are block-based) */
@@ -27,6 +29,7 @@ static inline size_t dtype_size(DataType dt) {
         case DTYPE_F16:  return 2;
         case DTYPE_Q8_0: return 1;  /* approximate */
         case DTYPE_Q4_0: return 1;  /* approximate — real size is block-based */
+        case DTYPE_Q4_K: return 1;  /* approximate — real size is block-based */
         default:         return 0;
     }
 }
@@ -41,6 +44,7 @@ typedef struct {
     int      stride[MAX_DIMS];  /* stride in elements (not bytes) */
     int      ndim;              /* number of active dimensions (1-4) */
     DataType dtype;
+    size_t   byte_size;         /* authoritative size in bytes (esp. for quant); 0 if unknown */
 } Tensor;
 
 /* Convenience: total number of elements */
@@ -52,6 +56,18 @@ static inline int tensor_numel(const Tensor* t) {
     return n;
 }
 
+/* Total bytes addressed by this tensor.
+ * Prefer this over dtype_size() for any allocation/bounds logic.
+ * For quantized tensors, loader should set byte_size; otherwise returns 0. */
+static inline size_t tensor_nbytes(const Tensor* t) {
+    if (t == NULL) return 0;
+    if (t->byte_size != 0) return t->byte_size;
+    if (t->dtype == DTYPE_F32 || t->dtype == DTYPE_F16) {
+        return (size_t)tensor_numel(t) * dtype_size(t->dtype);
+    }
+    return 0;
+}
+
 /* ---------- Model config ---------- */
 
 typedef struct {
@@ -61,6 +77,8 @@ typedef struct {
     int head_dim;       /* d_k = hidden_dim / n_heads */
     int n_layers;       /* number of transformer layers */
     int vocab_size;     /* vocabulary size */
+    int bos_token_id;   /* beginning-of-sequence token id */
+    int eos_token_id;   /* end-of-sequence token id */
     int ff_dim;         /* MLP intermediate dimension (H_ff) */
     int max_seq_len;    /* maximum sequence length */
     char** vocab_strings;
@@ -88,7 +106,7 @@ typedef struct {
     LayerWeights* layers;       /* array of n_layers */
     Tensor*       embedding;    /* token embedding: (vocab_size, H) */
     Tensor*       rms_final;    /* final RMSNorm weight: (H,) */
-    Tensor*       lm_head;      /* output projection: (H, vocab_size) */
+    Tensor*       lm_head;      /* output projection: (vocab_size, H) */
 } ModelWeights;
 
 /* ---------- Opaque handles (defined in their respective .c files) ---------- */

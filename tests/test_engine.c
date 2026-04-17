@@ -56,9 +56,10 @@ static void init_layer_weights(LayerWeights* lw, int H, int ff) {
     lw->wk       = make_weight_2d(H, H, 0.001f);
     lw->wv       = make_weight_2d(H, H, 0.001f);
     lw->wo       = make_weight_2d(H, H, 0.001f);
-    lw->w_gate   = make_weight_2d(H, ff, 0.001f);
-    lw->w_up     = make_weight_2d(H, ff, 0.001f);
-    lw->w_down   = make_weight_2d(ff, H, 0.001f);
+    /* gemm_f32 expects weights as (out_features, in_features) */
+    lw->w_gate   = make_weight_2d(ff, H, 0.001f);
+    lw->w_up     = make_weight_2d(ff, H, 0.001f);
+    lw->w_down   = make_weight_2d(H, ff, 0.001f);
     lw->rms_att  = make_weight_1d(H, 1.0f);
     lw->rms_ffn  = make_weight_1d(H, 1.0f);
 }
@@ -163,7 +164,7 @@ static void test_forward_stub(void) {
     }
     model.embedding = make_weight_2d(V, H, 0.001f);
     model.rms_final = make_weight_1d(H, 1.0f);
-    model.lm_head   = make_weight_2d(H, V, 0.001f);
+    model.lm_head   = make_weight_2d(V, H, 0.001f);
 
     /* Run forward for 3 tokens (prefill) */
     int tokens[] = {1, 5, 10};

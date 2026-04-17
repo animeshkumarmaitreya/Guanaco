@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <assert.h>
 
 /* ---------- Tensor helpers ---------- */
 
@@ -27,6 +28,7 @@ static Tensor* scratch_tensor(Scratch* scr, int ndim, int d0, int d1, int d2, in
     t->ndim = ndim;
     t->shape[0] = d0; t->shape[1] = d1; t->shape[2] = d2; t->shape[3] = d3;
     t->dtype = DTYPE_F32;
+    t->byte_size = 0;
 
     /* Compute strides (row-major) */
     int dims[4] = {d0, d1, d2, d3};
@@ -38,6 +40,7 @@ static Tensor* scratch_tensor(Scratch* scr, int ndim, int d0, int d1, int d2, in
     /* Allocate data */
     int numel = tensor_numel(t);
     t->data = scratch_alloc(scr, numel * sizeof(float), 64);
+    t->byte_size = (size_t)numel * sizeof(float);
     return t;
 }
 
@@ -47,12 +50,15 @@ static Tensor make_view(void* data, int ndim, int d0, int d1, int d2) {
     t.data = data;
     t.ndim = ndim;
     t.dtype = DTYPE_F32;
+    t.byte_size = 0;
     t.shape[0] = d0; t.shape[1] = d1; t.shape[2] = d2; t.shape[3] = 0;
 
     if (ndim == 1) { t.stride[0] = 1; }
     else if (ndim == 2) { t.stride[0] = d1; t.stride[1] = 1; }
     else if (ndim == 3) { t.stride[0] = d1 * d2; t.stride[1] = d2; t.stride[2] = 1; }
+    else { assert(!"make_view only supports ndim 1..3"); }
     t.stride[3] = 0;
+    t.byte_size = (size_t)tensor_numel(&t) * sizeof(float);
     return t;
 }
 
@@ -66,6 +72,7 @@ static void embedding_lookup(const Tensor* embedding, int* token_ids, int n_toke
 
     for (int t = 0; t < n_tokens; t++) {
         int tok = token_ids[t];
+        assert(tok >= 0 && tok < embedding->shape[0]);
         memcpy(out_data + t * H, emb_data + tok * H, H * sizeof(float));
     }
 }
@@ -80,6 +87,8 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
     int n_kv_heads = cfg->n_kv_heads;
     int head_dim = cfg->head_dim;
     int kv_dim = n_kv_heads * head_dim;  /* total KV projection size */
+    assert(n_kv_heads > 0);
+    assert(n_heads % n_kv_heads == 0);
     int heads_per_kv = n_heads / n_kv_heads;  /* for GQA */
 
     /* ---- Step 1: Save residual ---- */

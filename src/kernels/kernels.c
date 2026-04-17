@@ -1,11 +1,34 @@
 #include "kernels.h"
 #include <immintrin.h>
+#include <assert.h>
 #include <math.h>
 #include <string.h>
 
 /* ---- Person A's raw AVX2 kernels ---- */
 
 void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C) {
+#ifndef NDEBUG
+    assert(A != NULL && B != NULL && C != NULL);
+    assert(A->data != NULL && B->data != NULL && C->data != NULL);
+    assert(A->ndim == 2);
+    assert(B->ndim == 2);
+    assert(C->ndim == 2);
+    assert(A->dtype == DTYPE_F32);
+    assert(B->dtype == DTYPE_F32);
+    assert(C->dtype == DTYPE_F32);
+
+    // Contract: C(M,N) = A(M,K) * B(N,K)^T, with all tensors contiguous row-major
+    assert(A->shape[0] > 0 && A->shape[1] > 0);
+    assert(B->shape[0] > 0 && B->shape[1] > 0);
+    assert(B->shape[1] == A->shape[1]);
+    assert(C->shape[0] == A->shape[0]);
+    assert(C->shape[1] == B->shape[0]);
+
+    // Current implementation assumes contiguous layout and ignores stride fields.
+    assert(A->stride[0] == A->shape[1] && A->stride[1] == 1);
+    assert(B->stride[0] == B->shape[1] && B->stride[1] == 1);
+    assert(C->stride[0] == C->shape[1] && C->stride[1] == 1);
+#endif
     int M = A->shape[0];
     int K = A->shape[1];
     /* B is stored as (out_features, in_features) which is (N, K) */
@@ -45,6 +68,22 @@ void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C) {
 }
 
 void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float eps) {
+#ifndef NDEBUG
+    assert(input != NULL && output != NULL);
+    assert(input->data != NULL && output->data != NULL);
+    assert(input->ndim == 2);
+    assert(output->ndim == 2);
+    assert(input->dtype == DTYPE_F32);
+    assert(output->dtype == DTYPE_F32);
+    assert(output->shape[0] == input->shape[0]);
+    assert(output->shape[1] == input->shape[1]);
+    if (weight) {
+        assert(weight->data != NULL);
+        assert(weight->ndim == 1);
+        assert(weight->dtype == DTYPE_F32);
+        assert(weight->shape[0] == input->shape[1]);
+    }
+#endif
     int seq_len = input->shape[0];
     int dim = input->shape[1];
     
@@ -69,7 +108,16 @@ void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float ep
 }
 
 void softmax_inplace(Tensor* scores, int seq_len) {
+#ifndef NDEBUG
+    assert(scores != NULL);
+    assert(scores->data != NULL);
+    assert(scores->dtype == DTYPE_F32);
+    assert(seq_len > 0);
+#endif
     int total = tensor_numel(scores);
+#ifndef NDEBUG
+    assert(total % seq_len == 0);
+#endif
     int rows = total / seq_len;
     float* data = (float*)scores->data;
 
@@ -100,6 +148,11 @@ void softmax_inplace(Tensor* scores, int seq_len) {
 }
 
 void silu_inplace(Tensor* x) {
+#ifndef NDEBUG
+    assert(x != NULL);
+    assert(x->data != NULL);
+    assert(x->dtype == DTYPE_F32);
+#endif
     int numel = tensor_numel(x);
     float* data = (float*)x->data;
     for (int i = 0; i < numel; i++) {
@@ -108,6 +161,13 @@ void silu_inplace(Tensor* x) {
 }
 
 void residual_add(Tensor* x, const Tensor* residual) {
+#ifndef NDEBUG
+    assert(x != NULL && residual != NULL);
+    assert(x->data != NULL && residual->data != NULL);
+    assert(x->dtype == DTYPE_F32);
+    assert(residual->dtype == DTYPE_F32);
+    assert(tensor_numel(x) == tensor_numel(residual));
+#endif
     int numel = tensor_numel(x);
     float* x_data = (float*)x->data;
     float* res_data = (float*)residual->data;
@@ -117,6 +177,13 @@ void residual_add(Tensor* x, const Tensor* residual) {
 }
 
 void elemwise_mul(Tensor* a, const Tensor* b) {
+#ifndef NDEBUG
+    assert(a != NULL && b != NULL);
+    assert(a->data != NULL && b->data != NULL);
+    assert(a->dtype == DTYPE_F32);
+    assert(b->dtype == DTYPE_F32);
+    assert(tensor_numel(a) == tensor_numel(b));
+#endif
     int numel = tensor_numel(a);
     float* a_data = (float*)a->data;
     float* b_data = (float*)b->data;
@@ -126,6 +193,16 @@ void elemwise_mul(Tensor* a, const Tensor* b) {
 }
 
 void rope(Tensor* q, Tensor* k, int pos, int head_dim) {
+#ifndef NDEBUG
+    assert(q != NULL && k != NULL);
+    assert(q->data != NULL && k->data != NULL);
+    assert(q->dtype == DTYPE_F32 && k->dtype == DTYPE_F32);
+    assert(q->ndim == 2 && k->ndim == 2);
+    assert(q->shape[1] == head_dim);
+    assert(k->shape[1] == head_dim);
+    assert(q->stride[1] == 1);
+    assert(k->stride[1] == 1);
+#endif
     int n_heads = q->shape[0];
     int n_kv_heads = k->shape[0];
     

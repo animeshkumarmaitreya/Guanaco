@@ -10,8 +10,13 @@
  * All buffer pointers must be 64-byte aligned.
  *============================================================================*/
 
-/* Matrix multiply: C = A × B
- * A: (M, K), B: (K, N), C: (M, N)   — all row-major, FP32 */
+/* Matrix multiply (matches GGUF weight layout): C = A × B^T
+ * A: (M, K) row-major
+ * B: (N, K) row-major (each row is one output feature / one vector of length K)
+ * C: (M, N) row-major
+ *
+ * This is equivalent to computing a batch of dot-products between rows of A and rows of B.
+ */
 void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C);
 
 /* RMSNorm: output = (input / rms(input)) * weight

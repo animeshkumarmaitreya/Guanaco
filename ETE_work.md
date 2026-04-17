@@ -20,7 +20,7 @@ Important nuance: in GGUF/GGML, both `Q4_K_M` and `Q4_K_L` are stored as the sam
 6. Lightweight validation infra (tests + minimal oracles)
 
 ### Optional scope
-- True top-k / top-p + `--seed`
+- True top-k / top-p *(DONE 2026-04-18)* + `--seed` *(still optional)*
 - Tokenizer trie (no output changes)
 - Long context sliding window
 - GPU Phase C (full GPU forward)
@@ -30,6 +30,40 @@ Important nuance: in GGUF/GGML, both `Q4_K_M` and `Q4_K_L` are stored as the sam
 - CUDA decode-only phase
 - Load-time full dequantization of weights
 - Tokenizer behavior redesign
+
+---
+
+## 0.1) Pre-flight setup (must land before feature work)
+
+These are small, high-leverage changes that prevent later rework and unblock parallel development.
+
+1) **Fix the `gemm_f32()` contract mismatch**
+- [x] Update `src/include/kernels.h` docs (and any internal comments) to match reality: `gemm_f32(A(M,K), B(N,K)) -> C(M,N)` computes $A\times B^T$. *(DONE 2026-04-18)*
+- [x] Align `tests/test_kernels.c` GEMM expectations with this contract so `make test_kernels` is a reliable validator. *(DONE 2026-04-18)*
+- [x] Add debug assertions in GEMM kernels to catch wiring mistakes early (e.g., verify `A.shape[1] == B.shape[1]` and `C.shape == (A.M, B.N)`). *(DONE 2026-04-18)*
+
+2) **Parse BOS/EOS token IDs from GGUF**
+- [x] Extend `ModelConfig` with `int bos_token_id; int eos_token_id;`. *(DONE 2026-04-18)*
+- [x] In `src/engine/loader.c`, parse and populate these from GGUF metadata keys (commonly `tokenizer.ggml.bos_token_id` / `tokenizer.ggml.eos_token_id`). *(DONE 2026-04-18)*
+- [x] Update generation to stop on `cfg->eos_token_id` rather than hardcoding `2`. *(DONE 2026-04-18)*
+
+3) **Tokenizer entry point for incremental chat**
+- [x] Keep existing `tokenize()` behavior for single-shot generation. *(DONE 2026-04-18)*
+- [x] Add a second entry point for chat turns that does not inject BOS each time (`tokenize_no_bos()`), so chat can append tokens safely. *(DONE 2026-04-18)*
+
+4) **CLI + Makefile scaffolding**
+- [x] Extend `CLIArgs` + `cli_parse()` to include `--device`, `--threads`, and `--chat` (and optionally `--seed`, `--ctx-window` later). *(DONE 2026-04-18)*
+- [x] Add Makefile switches:
+  - `USE_CUDA ?= 0` for optional CUDA compilation/linking.
+  - `USE_PTHREAD ?= 0` to enable `-pthread` compile/link flags when CPU threads land. *(DONE 2026-04-18)*
+
+5) **Hardening + correctness fixes (do before heavy refactors)**
+- [x] Make top-k/top-p sampling real (no silent fallback) and expose `--top-k/--top-p` in `--help`. *(DONE 2026-04-18)*
+- [x] Add debug-only assertions beyond GEMM (kernels + engine + KV cache) to catch shape/dtype wiring mistakes early. *(DONE 2026-04-18)*
+- [x] Add authoritative tensor byte sizing: `Tensor.byte_size` + `tensor_nbytes()`, and populate/validate `byte_size` in the GGUF loader (block-aware for quant types). *(DONE 2026-04-18)*
+- [x] Fail fast on unsupported GGUF tensor dtypes (instead of silently treating unknown quant bytes as F32). *(DONE 2026-04-18)*
+
+Only after the above are merged should the heavier work (CUDA/quant/threading/refactors) proceed.
 
 ---
 
@@ -43,8 +77,19 @@ Important nuance: in GGUF/GGML, both `Q4_K_M` and `Q4_K_L` are stored as the sam
 - Tokenizer/sampling/CLI: `src/tokenizer/tokenizer.c`
 
 **Important baseline constraint:**
-- Linear layers currently use `gemm_f32()` where weights are stored as `(out_features, in_features)` and the kernel computes `C = A * B^T`.
+- Linear layers currently use `gemm_f32()` (implemented in `src/kernels/kernels.c`) with weights stored row-major as `(N, K)` and computed as:
+  - $C(M,N) = A(M,K) \times B(N,K)^T$ (i.e., dot product against *rows* of the weight matrix).
+  - Status: `src/include/kernels.h` docs have been aligned to match this contract.
 - Attention is *not* GEMM-based yet: it uses explicit dot-product loops for scores and context.
+
+**Token ID correctness prerequisite (Llama-3.1 GGUF):**
+- BOS/EOS ids are parsed from GGUF metadata into `ModelConfig` and used by both tokenizer and generation. *(DONE 2026-04-18)*
+- `tokenize()` prepends BOS using `cfg->bos_token_id`; chat mode must use `tokenize_no_bos()` to avoid injecting BOS every turn. *(DONE 2026-04-18)*
+
+**Non-F32 weights (current reality):**
+- The runtime kernels are FP32-only today.
+- The loader now rejects non-F32 required weights (F16/Q4_K/Q8_0, etc.) with an explicit error, rather than misinterpreting bytes as floats.
+- Phase B quant (and optional F16 support) will remove this restriction.
 
 ---
 
@@ -132,17 +177,22 @@ $$\text{scores}(T, \text{seq\_len}) = Q_h(T, d) \cdot K_h(\text{seq\_len}, d)^T$
 $$\text{ctx}(T, d) = \text{scores}(T, \text{seq\_len}) \cdot V_h(\text{seq\_len}, d)$$
 
 ### 3.3 Kernel needs
-We need **two** GEMM variants:
+We need **two** GEMM variants (one exists today, one must be added):
 
-- `gemm_f32()` (already exists): computes `C = A * B^T` given B stored as `(N, K)`.
-  - Perfect for scores if we pass B = K_h (rows = seq_len, cols = head_dim).
+- `gemm_f32()` (already exists): computes $C(M,N) = A(M,K) \times B(N,K)^T$ where `B` is stored as `(N,K)`.
+  - Used for scores: $\text{scores}(T,\text{seq}) = Q(T,d) \times K(\text{seq},d)^T$.
 
-- `gemm_f32_nn()` (new): computes standard `C = A * B` with B stored as `(K, N)`.
-  - Needed for context since V_h is naturally `(seq_len, head_dim)`.
+- `gemm_f32_nn()` (new): computes standard $C(M,N) = A(M,K) \times B(K,N)$.
+  - Used for context: $\text{ctx}(T,d) = \text{scores}(T,\text{seq}) \times V(\text{seq},d)$ without materializing `V^T` into scratch.
 
 ### 3.4 Scratch/memory plan (thread-safe)
 - Do not allocate per-head temporaries inside parallel sections.
 - For the initial refactor, keep attention heads sequential but GEMM threaded internally.
+
+**Critical layout nuance (must handle explicitly):**
+- In the current repo, GEMM kernels assume contiguous row-major buffers and effectively ignore `Tensor.stride[]`.
+- `Q` is stored as `(T, H)`; a per-head slice `Q_h` is strided by `H` across rows and is *not* a contiguous `(T, head_dim)` matrix.
+- Therefore, for each head, pack `Q_h` into a contiguous scratch matrix before calling `gemm_f32()`.
 
 Scratch allocations (per layer):
 - Q, K, V projections: `T*H`, `T*kv_dim`, `T*kv_dim`
@@ -210,6 +260,15 @@ static void linear(const Tensor* X, const Tensor* W, Tensor* Y,
   // fallback (prefill): use float GEMM if W is float; else (MVP) loop matvec over rows
 }
 ```
+
+**End-to-end quant correctness requirements (easy to miss):**
+- `embedding_lookup()` must branch on `model->embedding->dtype`:
+  - If float (F32/F16) → existing `memcpy` path.
+  - If `DTYPE_Q8_0` (possible in Q4_K_L variants) → dequantize the selected embedding row into the FP32 hidden buffer.
+- Final logits projection must dispatch:
+  - If `lm_head` is float → existing `gemm_f32` path (with the repo’s $A\times B^T$ semantics).
+  - If `lm_head` is `DTYPE_Q8_0` or `DTYPE_Q4_K` → quant matvec path when `T==1`.
+- Do not assume “quantization only affects Wq/Wk/Wv/Wo and MLP”; embeddings and output weights can also be quantized in the selected target models.
 
 ### 5.4 Q8_0 format (implementation notes)
 - Block size: 32 logical elements.

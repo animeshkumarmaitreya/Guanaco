@@ -9,6 +9,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static const char* device_kind_str(DeviceKind k) {
+    switch (k) {
+        case DEVICE_CPU:  return "cpu";
+        case DEVICE_CUDA: return "cuda";
+        case DEVICE_AUTO:
+        default:          return "auto";
+    }
+}
+
 int main(int argc, char** argv) {
     CLIArgs args;
     int result = cli_parse(argc, argv, &args);
@@ -23,6 +32,8 @@ int main(int argc, char** argv) {
     printf("  Temperature: %.2f\n", args.temperature);
     printf("  Top-k:       %d\n", args.top_k);
     printf("  Top-p:       %.2f\n", args.top_p);
+    printf("  Device:      %s\n", device_kind_str(args.device));
+    printf("  Threads:     %d\n", args.threads);
     printf("---\n");
 
     generate(args.model_path, args.prompt, args.max_tokens,

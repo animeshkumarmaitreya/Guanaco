@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <assert.h>
 
 struct KVCache {
     float*       k_data;     /* all K: [n_layers][n_kv_heads][max_seq][head_dim] */
@@ -89,6 +90,17 @@ int kv_cache_append(KVCache* kv, int layer, const Tensor* k, const Tensor* v, in
     if (kv == NULL || k == NULL || v == NULL) return -1;
     if (pos < 0 || pos >= kv->max_seq) return -1;
     if (layer < 0 || layer >= kv->cfg.n_layers) return -1;
+
+#ifndef NDEBUG
+    assert(k->dtype == DTYPE_F32 && v->dtype == DTYPE_F32);
+    assert(k->ndim == 2 && v->ndim == 2);
+    assert(k->shape[0] == kv->cfg.n_kv_heads);
+    assert(v->shape[0] == kv->cfg.n_kv_heads);
+    assert(k->shape[1] == kv->cfg.head_dim);
+    assert(v->shape[1] == kv->cfg.head_dim);
+    assert(k->stride[0] == kv->cfg.head_dim && k->stride[1] == 1);
+    assert(v->stride[0] == kv->cfg.head_dim && v->stride[1] == 1);
+#endif
 
     int n_kv = kv->cfg.n_kv_heads;
     int d    = kv->cfg.head_dim;

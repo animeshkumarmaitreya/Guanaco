@@ -84,6 +84,14 @@ int sample_top_p(const float* logits, int vocab_size, float p, float temperature
 
 /* ---- CLI stub ---- */
 
+static DeviceKind parse_device_kind(const char* s) {
+    if (!s) return DEVICE_AUTO;
+    if (strcmp(s, "auto") == 0) return DEVICE_AUTO;
+    if (strcmp(s, "cpu") == 0) return DEVICE_CPU;
+    if (strcmp(s, "cuda") == 0) return DEVICE_CUDA;
+    return DEVICE_AUTO;
+}
+
 int cli_parse(int argc, char** argv, CLIArgs* args) {
     /* Set defaults */
     args->model_path  = NULL;
@@ -92,6 +100,9 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
     args->temperature = 0.7f;
     args->top_k       = 40;
     args->top_p       = 0.9f;
+    args->device      = DEVICE_AUTO;
+    args->threads     = 1;
+    args->chat        = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -102,6 +113,9 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
             printf("  --temperature <float> Sampling temperature (default: 0.7)\n");
             printf("  --top-k <int>         Top-k sampling (default: 40)\n");
             printf("  --top-p <float>       Top-p sampling (default: 0.9)\n");
+            printf("  --device <kind>       Device: auto|cpu|cuda (default: auto)\n");
+            printf("  --threads <N>         CPU threads (default: 1)\n");
+            printf("  --chat                Chat REPL mode\n");
             printf("  --help                Show this help\n");
             return 1;  /* signal help printed */
         }
@@ -117,10 +131,38 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
             args->top_k = atoi(argv[++i]);
         else if (strcmp(argv[i], "--top-p") == 0 && i + 1 < argc)
             args->top_p = (float)atof(argv[++i]);
+        else if (strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
+            const char* kind = argv[++i];
+            args->device = parse_device_kind(kind);
+            if (strcmp(kind, "auto") != 0 && strcmp(kind, "cpu") != 0 && strcmp(kind, "cuda") != 0) {
+                fprintf(stderr, "Error: invalid --device '%s' (expected auto|cpu|cuda)\n", kind);
+                return -1;
+            }
+        }
+        else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
+            args->threads = atoi(argv[++i]);
+            if (args->threads < 1) {
+                fprintf(stderr, "Error: --threads must be >= 1\n");
+                return -1;
+            }
+        }
+        else if (strcmp(argv[i], "--chat") == 0) {
+            args->chat = 1;
+        }
         else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             return -1;
         }
+    }
+
+    if (args->chat) {
+        fprintf(stderr, "Error: --chat is not implemented yet\n");
+        return -1;
+    }
+
+    if (args->device == DEVICE_CUDA) {
+        fprintf(stderr, "Error: --device cuda requested but CUDA is not enabled in this build (try: make USE_CUDA=1)\n");
+        return -1;
     }
 
     if (!args->model_path) {
