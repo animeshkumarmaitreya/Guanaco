@@ -12,13 +12,15 @@
 
 struct Tokenizer {
     int vocab_size;
+    int bos_token_id;
 };
 
-Tokenizer* tokenizer_create(const char* model_path) {
-    (void)model_path;
+Tokenizer* tokenizer_create(const ModelConfig* cfg) {
+    (void)cfg;
     Tokenizer* tok = (Tokenizer*)malloc(sizeof(Tokenizer));
     if (!tok) return NULL;
-    tok->vocab_size = 32000;  /* default LLaMA vocab size */
+    tok->vocab_size = (cfg && cfg->vocab_size > 0) ? cfg->vocab_size : 32000;
+    tok->bos_token_id = (cfg && cfg->bos_token_id > 0) ? cfg->bos_token_id : 1;
     return tok;
 }
 
@@ -27,10 +29,21 @@ int* tokenize(Tokenizer* tok, const char* text, int* out_len) {
     /* Stub: one token per character (NOT correct BPE — placeholder only) */
     int len = (int)strlen(text);
     if (len == 0) { *out_len = 0; return NULL; }
-    int* ids = (int*)malloc(len * sizeof(int));
-    for (int i = 0; i < len; i++) {
-        ids[i] = (unsigned char)text[i];  /* ASCII as token ID */
-    }
+    int add_bos = (tok && tok->bos_token_id > 0) ? 1 : 0;
+    int* ids = (int*)malloc((size_t)(len + add_bos) * sizeof(int));
+    int n = 0;
+    if (add_bos) ids[n++] = tok->bos_token_id;
+    for (int i = 0; i < len; i++) ids[n++] = (unsigned char)text[i];
+    *out_len = n;
+    return ids;
+}
+
+int* tokenize_no_bos(Tokenizer* tok, const char* text, int* out_len) {
+    (void)tok;
+    int len = (int)strlen(text);
+    if (len == 0) { *out_len = 0; return NULL; }
+    int* ids = (int*)malloc((size_t)len * sizeof(int));
+    for (int i = 0; i < len; i++) ids[i] = (unsigned char)text[i];
     *out_len = len;
     return ids;
 }

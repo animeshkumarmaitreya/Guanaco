@@ -135,8 +135,11 @@ src/backend/cpu_backend.c      // vtable points at functions implemented in src/
 src/backend/cuda_backend.c     // vtable points at CUDA implementations
 
 src/kernels/kernels.c          // CPU kernels (existing) + new CPU quant matvecs + optional threadpool
-src/kernels/kernels_cuda.cu    // CUDA kernels (new)
-src/kernels/kernels_cuda.h     // C-callable wrappers (new)
+src/kernels/cuda/kernels_cuda.cu  // CUDA kernels (new)
+src/kernels/cuda/kernels_cuda.h   // C-callable wrappers (new)
+
+src/kernels/cpu/gemm_f32_nn.c  // standard GEMM (A*B) helper for attention-as-GEMM
+src/kernels/cpu/quant_matvec_* // quant decode matvec hooks (Phase B)
 ```
 
 ### 2.4 CLI contract
@@ -151,11 +154,53 @@ Extend `CLIArgs` and `cli_parse()`:
 
 ### 2.5 Engine wiring
 Update signatures:
+- `transformer_layer(..., const KernelVTable* k)`
 - `forward(..., const KernelVTable* k)`
-- `generate(..., const KernelVTable* k, BackendKind kind)`
+- `generate(..., const BackendConfig* backend_cfg)`
+
+Implementation note (current repo): `generate()` is responsible for creating/destroying the backend and fetching the `KernelVTable` once. Hot engine code (`transformer_layer`/`forward`) receives only the vtable.
 
 Rationale:
-- `generate()` contains prefill and decode loops and must pick CPU decode even when Phase A uses GPU prefill.
+- `generate()` contains prefill and decode loops. For Phase A (GPU prefill + CPU decode), this will require either (a) two backends (prefill backend + decode backend) or (b) a backend that can internally route decode to CPU without reintroducing per-layer host↔device transfers.
+
+### 2.6 Status update (DONE 2026-04-19)
+
+Backend abstraction is now wired end-to-end for CPU builds:
+
+- Engine hot path routes kernel calls through `KernelVTable` (no direct CPU kernel calls from engine).
+- `--device auto|cpu|cuda` is mapped into a `BackendConfig` in `src/main.c` and passed into `generate()`.
+- `BACKEND_AUTO` exists and `backend_create()` implements AUTO selection (try CUDA if compiled in, else CPU).
+- Engine tests create a CPU backend and use its vtable (so tests exercise the new dispatch path).
+
+Changes touched (implementation artifacts):
+- `src/include/engine.h` signature changes (adds backend types; vtable/config parameters)
+- `src/engine/engine.c` (dispatch via `k->...`)
+- `src/engine/generate.c` (backend lifetime + printing selected backend)
+- `src/include/backend.h` + `src/backend/*` (AUTO semantics)
+- `tests/test_engine.c` (backend-backed vtable usage)
+- `Makefile` (link backend objects + vtable-referenced objects)
+- Stub build compatibility fixes: `src/stubs/stub_engine.c`, `src/stubs/stub_tokenizer.c`
+
+### 2.7 Integration notes (important for upcoming features)
+
+1) **Linking gotcha (vtable symbol references):**
+- `backend_cpu_create()` wires `gemm_f32_nn` and quant matvec hooks into the vtable, even though the engine does not call them yet.
+- Therefore, binaries that link the backend must also link the objects that define those symbols (currently handled in the Makefile for `llmrt` and `test_engine`). If you add new backend targets/tests, copy the same link set or you will get unresolved symbols at link time.
+
+2) **CUDA backend currently unavailable by design:**
+- `backend_cuda_create()` currently returns `NULL` (stub). With `--device auto`, AUTO will select CPU until Phase A is implemented.
+- With `--device cuda`, `generate()` errors out if no CUDA backend can be created.
+
+3) **Backend requirements are enforced:**
+- `transformer_layer()` asserts that required `KernelVTable` entries are non-NULL (GEMM, RMSNorm, RoPE, softmax, etc.). Any new backend must provide these.
+
+### 2.8 Still incomplete (must be implemented later)
+
+- CPU attention-as-GEMM refactor is not implemented yet (engine still uses explicit dot-product loops for attention).
+- `gemm_f32_nn()` is still a stub and not used by the engine yet; it must be implemented before attention-as-GEMM can land.
+- Phase A GPU prefill (and optional Phase C full GPU forward) are not implemented.
+- Quant Phase B kernels are still stubs (matvec functions currently return failure); loader/runtime work remains.
+- Golden-data consumption in C tests (loading `golden_data/*.bin` and diffing tensors) is not implemented.
 
 ---
 

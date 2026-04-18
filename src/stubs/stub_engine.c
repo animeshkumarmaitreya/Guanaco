@@ -20,23 +20,26 @@ void free_model(ModelWeights* model) {
 }
 
 void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
-                       int layer, int pos, Scratch* scr, ModelConfig* cfg) {
+                       int layer, int pos, Scratch* scr, ModelConfig* cfg,
+                       const KernelVTable* k) {
     (void)hidden; (void)weights; (void)kv;
-    (void)layer; (void)pos; (void)scr; (void)cfg;
+    (void)layer; (void)pos; (void)scr; (void)cfg; (void)k;
     fprintf(stderr, "[STUB] transformer_layer: not implemented\n");
 }
 
 Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
-                int* token_ids, int n_tokens, int pos) {
+                int* token_ids, int n_tokens, int pos,
+                const KernelVTable* k) {
     (void)model; (void)kv; (void)scr;
-    (void)token_ids; (void)n_tokens; (void)pos;
+    (void)token_ids; (void)n_tokens; (void)pos; (void)k;
     fprintf(stderr, "[STUB] forward: not implemented\n");
     return NULL;
 }
 
 void generate(const char* model_path, const char* prompt, int max_tokens,
-              float temperature, int top_k, float top_p) {
+              float temperature, int top_k, float top_p,
+              const BackendConfig* backend_cfg) {
     (void)model_path; (void)prompt; (void)max_tokens;
-    (void)temperature; (void)top_k; (void)top_p;
+    (void)temperature; (void)top_k; (void)top_p; (void)backend_cfg;
     fprintf(stderr, "[STUB] generate: not implemented\n");
 }

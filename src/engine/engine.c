@@ -11,7 +11,6 @@
  *============================================================================*/
 
 #include "engine.h"
-#include "kernels.h"
 #include "memory.h"
 
 #include <stdio.h>
@@ -80,7 +79,17 @@ static void embedding_lookup(const Tensor* embedding, int* token_ids, int n_toke
 /* ---------- Transformer Layer ---------- */
 
 void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
-                       int layer, int pos, Scratch* scr, ModelConfig* cfg) {
+                       int layer, int pos, Scratch* scr, ModelConfig* cfg,
+                       const KernelVTable* k) {
+    assert(k != NULL);
+    assert(k->gemm_f32 != NULL);
+    assert(k->rmsnorm != NULL);
+    assert(k->softmax_inplace != NULL);
+    assert(k->silu_inplace != NULL);
+    assert(k->rope != NULL);
+    assert(k->residual_add != NULL);
+    assert(k->elemwise_mul != NULL);
+
     int T = hidden->shape[0];   /* number of tokens (1 for decode, T for prefill) */
     int H = cfg->hidden_dim;
     int n_heads = cfg->n_heads;
@@ -97,16 +106,16 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
 
     /* ---- Step 2: Pre-attention RMSNorm ---- */
     Tensor* normed = scratch_tensor(scr, 2, T, H, 0, 0);
-    rmsnorm(hidden, weights->rms_att, normed, 1e-6f);
+    k->rmsnorm(hidden, weights->rms_att, normed, 1e-6f);
 
     /* ---- Step 3: QKV projections ---- */
     Tensor* Q = scratch_tensor(scr, 2, T, H, 0, 0);
     Tensor* K = scratch_tensor(scr, 2, T, kv_dim, 0, 0);
     Tensor* V = scratch_tensor(scr, 2, T, kv_dim, 0, 0);
 
-    gemm_f32(normed, weights->wq, Q);   /* (T, H) × (H, H) = (T, H) */
-    gemm_f32(normed, weights->wk, K);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
-    gemm_f32(normed, weights->wv, V);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
+    k->gemm_f32(normed, weights->wq, Q);   /* (T, H) × (H, H) = (T, H) */
+    k->gemm_f32(normed, weights->wk, K);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
+    k->gemm_f32(normed, weights->wv, V);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
 
     /* ---- Step 4: RoPE on Q and K ---- */
     for (int t = 0; t < T; t++) {
@@ -116,7 +125,7 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
         Tensor q_view = make_view(q_t, 2, n_heads, head_dim, 0);
         Tensor k_view = make_view(k_t, 2, n_kv_heads, head_dim, 0);
 
-        rope(&q_view, &k_view, pos + t, head_dim);
+        k->rope(&q_view, &k_view, pos + t, head_dim);
     }
 
     /* ---- Step 5: Append K, V to cache ---- */
@@ -180,7 +189,7 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
         /* Step 9: Softmax over each query row */
         for (int tq = 0; tq < T; tq++) {
             Tensor score_row = make_view(scores + tq * seq_len, 1, seq_len, 0, 0);
-            softmax_inplace(&score_row, seq_len);
+            k->softmax_inplace(&score_row, seq_len);
         }
 
         /* Step 10: context = scores × V — (T, seq_len) × (seq_len, head_dim) = (T, head_dim) */
@@ -200,17 +209,17 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
 
     /* ---- Step 11: Output projection ---- */
     Tensor* attn_proj = scratch_tensor(scr, 2, T, H, 0, 0);
-    gemm_f32(attn_output, weights->wo, attn_proj);  /* (T, H) × (H, H) = (T, H) */
+    k->gemm_f32(attn_output, weights->wo, attn_proj);  /* (T, H) × (H, H) = (T, H) */
 
     /* ---- Step 12: Residual add ---- */
-    residual_add(attn_proj, residual);
+    k->residual_add(attn_proj, residual);
 
     /* ---- Step 13: Save residual ---- */
     memcpy(residual->data, attn_proj->data, T * H * sizeof(float));
 
     /* ---- Step 14: Pre-MLP RMSNorm ---- */
     Tensor* normed2 = scratch_tensor(scr, 2, T, H, 0, 0);
-    rmsnorm(attn_proj, weights->rms_ffn, normed2, 1e-6f);
+    k->rmsnorm(attn_proj, weights->rms_ffn, normed2, 1e-6f);
 
     /* ---- Step 15-19: SwiGLU MLP ---- */
     int ff_dim = cfg->ff_dim;
@@ -218,23 +227,23 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
     Tensor* up   = scratch_tensor(scr, 2, T, ff_dim, 0, 0);
 
     /* Step 15: gate = x × W_gate */
-    gemm_f32(normed2, weights->w_gate, gate);  /* (T, H) × (H, ff) = (T, ff) */
+    k->gemm_f32(normed2, weights->w_gate, gate);  /* (T, H) × (H, ff) = (T, ff) */
 
     /* Step 16: up = x × W_up */
-    gemm_f32(normed2, weights->w_up, up);      /* (T, H) × (H, ff) = (T, ff) */
+    k->gemm_f32(normed2, weights->w_up, up);      /* (T, H) × (H, ff) = (T, ff) */
 
     /* Step 17: SiLU(gate) */
-    silu_inplace(gate);
+    k->silu_inplace(gate);
 
     /* Step 18: gate = gate ⊙ up */
-    elemwise_mul(gate, up);
+    k->elemwise_mul(gate, up);
 
     /* Step 19: down = gate × W_down */
     Tensor* down = scratch_tensor(scr, 2, T, H, 0, 0);
-    gemm_f32(gate, weights->w_down, down);     /* (T, ff) × (ff, H) = (T, H) */
+    k->gemm_f32(gate, weights->w_down, down);     /* (T, ff) × (ff, H) = (T, H) */
 
     /* ---- Step 20: Residual add ---- */
-    residual_add(down, residual);
+    k->residual_add(down, residual);
 
     /* Write back to hidden */
     memcpy(hidden->data, down->data, T * H * sizeof(float));
@@ -243,7 +252,12 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
 /* ---------- Forward Pass ---------- */
 
 Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
-                int* token_ids, int n_tokens, int pos) {
+                int* token_ids, int n_tokens, int pos,
+                const KernelVTable* k) {
+    assert(k != NULL);
+    assert(k->gemm_f32 != NULL);
+    assert(k->rmsnorm != NULL);
+
     ModelConfig* cfg = &model->config;
     int H = cfg->hidden_dim;
 
@@ -256,12 +270,12 @@ Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
 
     /* Step 2: Run all transformer layers */
     for (int l = 0; l < cfg->n_layers; l++) {
-        transformer_layer(hidden, &model->layers[l], kv, l, pos, scr, cfg);
+        transformer_layer(hidden, &model->layers[l], kv, l, pos, scr, cfg, k);
     }
 
     /* Step 3: Final RMSNorm */
     Tensor* normed = scratch_tensor(scr, 2, n_tokens, H, 0, 0);
-    rmsnorm(hidden, model->rms_final, normed, 1e-6f);
+    k->rmsnorm(hidden, model->rms_final, normed, 1e-6f);
 
     /* Step 4: logits = normed[-1] × lm_head
      * We only need the last token's logits for generation */
@@ -269,7 +283,7 @@ Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
     Tensor last_view = make_view(last_hidden, 2, 1, H, 0);
 
     Tensor* logits = scratch_tensor(scr, 2, 1, cfg->vocab_size, 0, 0);
-    gemm_f32(&last_view, model->lm_head, logits);  /* (1, H) × (H, vocab_size) = (1, V) */
+    k->gemm_f32(&last_view, model->lm_head, logits);  /* (1, H) × (H, vocab_size) = (1, V) */
 
     return logits;
 }

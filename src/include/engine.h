@@ -2,6 +2,7 @@
 #define LLMRT_ENGINE_H
 
 #include "types.h"
+#include "backend.h"
 
 /*============================================================================
  * Engine & IO API — Animesh owns the implementation
@@ -30,7 +31,8 @@ void free_model(ModelWeights* model);
  * scr:     scratch allocator for temporaries
  * cfg:     model config */
 void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
-                       int layer, int pos, Scratch* scr, ModelConfig* cfg);
+                       int layer, int pos, Scratch* scr, ModelConfig* cfg,
+                       const KernelVTable* k);
 
 /* Run full forward pass: embed → N layers → final norm → logits.
  * token_ids: array of token IDs to process
@@ -39,7 +41,8 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
  * Returns:   logits tensor (1, vocab_size) for the last token.
  *            Allocated in scratch — valid until scratch_reset(). */
 Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
-                int* token_ids, int n_tokens, int pos);
+                int* token_ids, int n_tokens, int pos,
+                const KernelVTable* k);
 
 /* ---- Generation ---- */
 
@@ -51,6 +54,7 @@ Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
  * top_k:       top-k sampling parameter (0 = disabled)
  * top_p:       top-p sampling parameter (1.0 = disabled) */
 void generate(const char* model_path, const char* prompt, int max_tokens,
-              float temperature, int top_k, float top_p);
+              float temperature, int top_k, float top_p,
+              const BackendConfig* backend_cfg);
 
 #endif /* LLMRT_ENGINE_H */

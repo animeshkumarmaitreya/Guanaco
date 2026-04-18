@@ -7,9 +7,21 @@ Backend* backend_create(const BackendConfig* cfg) {
     if (cfg) {
         local = *cfg;
     } else {
-        local.kind = BACKEND_CPU;
+        local.kind = BACKEND_AUTO;
         local.threads = 1;
         local.device_id = 0;
+    }
+
+    if (local.kind == BACKEND_AUTO) {
+#if defined(USE_CUDA) && (USE_CUDA == 1)
+        BackendConfig cuda_cfg = local;
+        cuda_cfg.kind = BACKEND_CUDA;
+        Backend* b = backend_cuda_create(&cuda_cfg);
+        if (b) return b;
+#endif
+        BackendConfig cpu_cfg = local;
+        cpu_cfg.kind = BACKEND_CPU;
+        return backend_cpu_create(&cpu_cfg);
     }
 
     if (local.kind == BACKEND_CUDA) {

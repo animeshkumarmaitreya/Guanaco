@@ -19,7 +19,7 @@ The goal is to extend functionality in ways that are strongly aligned with a sys
 
 **Important implementation details (affect extensions)**
 - `forward(model, kv, scr, token_ids, n_tokens, pos)` already supports “incremental position” semantics: RoPE and KV append happen at `pos + t`. This is perfect for chat / streaming.
-- Sampler flags exist (`--top-k`, `--top-p`) but `sample_top_k()` and `sample_top_p()` currently fall back to `sample_temperature()` (no true top-k/top-p yet).
+- Sampler flags exist (`--top-k`, `--top-p`) and `sample_top_k()` / `sample_top_p()` implement true top-k/top-p.
 - Loader sets `Tensor.dtype` for quantized types (Q4/Q8) but the compute path assumes FP32 tensors. True quantized inference requires either load-time dequantization or quantized kernels.
 
 ---
@@ -36,6 +36,8 @@ Add one flag:
 
 Optionally add:
 - `--backend-report` (prints which backend is selected and why)
+
+Note: `--backend-report` is explicitly rejected in the current accepted ETE plans; prefer a single always-on line like “Selected backend: cpu/cuda” when `--device auto` is used.
 
 ### Runtime detection (auto)
 
@@ -54,7 +56,11 @@ To keep GPU support from turning into a web of `#ifdef USE_CUDA`, add a small ba
 - `KernelVTable`: function pointers matching the ops in [src/include/kernels.h](src/include/kernels.h)
 - `BackendContext`: optional state (CUDA streams, handles, scratch workspace)
 
-The engine selects a backend once (based on `--device`) and then calls `backend->kernels.gemm_f32(...)` etc.
+The engine selects a backend once (based on `--device`) and then calls kernels via the vtable:
+
+- `Backend* b = backend_create(...)`
+- `const KernelVTable* k = backend_kernels(b)`
+- `k->gemm_f32(...)`, `k->rmsnorm(...)`, etc.
 
 Critical note for your current engine: attention in [src/engine/engine.c](src/engine/engine.c) is computed using explicit dot-product loops. A “GEMM-only” CUDA backend will not accelerate that portion unless you refactor attention to express:
 

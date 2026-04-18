@@ -18,6 +18,19 @@ LDFLAGS  = -lm
 DEBUG_FLAGS = -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 BUILD    = build
 
+# Build switches (scaffolding for upcoming work)
+USE_CUDA ?= 0
+USE_PTHREAD ?= 0
+
+ifeq ($(USE_CUDA),1)
+	CFLAGS += -DUSE_CUDA=1
+endif
+
+ifeq ($(USE_PTHREAD),1)
+	CFLAGS += -DUSE_PTHREAD=1 -pthread
+	LDFLAGS += -pthread
+endif
+
 # Source files — stubs (replace with real implementations per person)
 STUB_KERNELS   = src/stubs/stub_kernels.c
 STUB_MEMORY    = src/stubs/stub_memory.c
@@ -30,13 +43,21 @@ REAL_KERNELS   = src/kernels/kernels.c
 REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
 REAL_TOKENIZER = src/tokenizer/tokenizer.c
 
+# Quant stubs (Phase B scaffolding)
+REAL_QUANT     = src/kernels/cpu/quant_matvec_q8_0.c src/kernels/cpu/quant_matvec_q4_k.c
+
+# Backend + threading scaffolding
+REAL_BACKEND   = src/backend/backend.c src/backend/cpu_backend.c src/backend/cuda_backend.c
+REAL_THREADPOOL = src/threadpool/threadpool.c
+REAL_KERNELS_EXT = src/kernels/cpu/gemm_f32_nn.c
+
 # Active per module — swap STUB ↔ REAL as each person finishes
 KERNELS   = $(REAL_KERNELS)
 MEMORY    = $(REAL_MEMORY)
 TOKENIZER = $(REAL_TOKENIZER)
 ENGINE    = $(REAL_ENGINE)
 
-.PHONY: all clean test test_kernels test_memory test_tokenizer test_engine debug
+.PHONY: all clean test test_kernels test_memory test_tokenizer test_engine test_quant test_e2e_smoke test_backend test_threadpool test_chat_stub test_gpu_prefill_stub debug
 
 all: $(BUILD)/llmrt
 
@@ -44,7 +65,9 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 # ---- Main binary ----
-$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) | $(BUILD)
+# Note: backend_cpu_create wires gemm_f32_nn + quant matvec hooks into the vtable,
+# so we must link those objects as well even if the engine doesn't call them yet.
+$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_KERNELS_EXT) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Test binaries ----
@@ -57,7 +80,25 @@ $(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
 $(BUILD)/test_tokenizer: tests/test_tokenizer.c $(REAL_TOKENIZER) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_MEMORY) $(REAL_TOKENIZER) | $(BUILD)
+$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_KERNELS_EXT) $(REAL_QUANT) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_e2e_smoke: tests/test_e2e_smoke.c | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_KERNELS_EXT) $(REAL_QUANT) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_threadpool: tests/test_threadpool.c $(REAL_THREADPOOL) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_chat_stub: tests/test_chat_stub.c src/engine/chat.c | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/test_gpu_prefill_stub: tests/test_gpu_prefill_stub.c src/engine/gpu_prefill.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Run tests ----
@@ -77,7 +118,31 @@ test_engine: $(BUILD)/test_engine
 	@echo "--- Running engine tests ---"
 	@./$(BUILD)/test_engine
 
-test: test_kernels test_memory test_tokenizer test_engine
+test_quant: $(BUILD)/test_quant
+	@echo "--- Running quantization stub tests ---"
+	@./$(BUILD)/test_quant
+
+test_e2e_smoke: $(BUILD)/test_e2e_smoke
+	@echo "--- Running E2E smoke stub tests ---"
+	@./$(BUILD)/test_e2e_smoke
+
+test_backend: $(BUILD)/test_backend
+	@echo "--- Running backend scaffolding tests ---"
+	@./$(BUILD)/test_backend
+
+test_threadpool: $(BUILD)/test_threadpool
+	@echo "--- Running threadpool scaffolding tests ---"
+	@./$(BUILD)/test_threadpool
+
+test_chat_stub: $(BUILD)/test_chat_stub
+	@echo "--- Running chat stub tests ---"
+	@./$(BUILD)/test_chat_stub
+
+test_gpu_prefill_stub: $(BUILD)/test_gpu_prefill_stub
+	@echo "--- Running GPU prefill stub tests ---"
+	@./$(BUILD)/test_gpu_prefill_stub
+
+test: test_kernels test_memory test_tokenizer test_engine test_quant test_e2e_smoke test_backend test_threadpool test_chat_stub test_gpu_prefill_stub
 	@echo ""
 	@echo "=== All test suites complete ==="
 

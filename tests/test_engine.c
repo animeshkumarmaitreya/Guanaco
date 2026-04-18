@@ -11,6 +11,7 @@
 #include "memory.h"
 #include "kernels.h"
 #include "tokenizer.h"
+#include "backend.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,23 @@
 #define FAIL(name, msg) do { printf("  FAIL: %s — %s\n", name, msg); failures++; } while(0)
 
 static int failures = 0;
+
+static const KernelVTable* cpu_kernels_or_fail(Backend** out_backend) {
+    BackendConfig cfg = {0};
+    cfg.kind = BACKEND_CPU;
+    cfg.threads = 1;
+    cfg.device_id = 0;
+
+    Backend* b = backend_create(&cfg);
+    if (!b) return NULL;
+    const KernelVTable* k = backend_kernels(b);
+    if (!k) {
+        backend_destroy(b);
+        return NULL;
+    }
+    if (out_backend) *out_backend = b;
+    return k;
+}
 
 /* ---------- Weight allocation helpers ---------- */
 
@@ -75,6 +93,10 @@ static void free_layer_weights(LayerWeights* lw) {
 /* ---------- Test transformer_layer ---------- */
 
 static void test_transformer_layer_shapes(void) {
+    Backend* backend = NULL;
+    const KernelVTable* k = cpu_kernels_or_fail(&backend);
+    if (!k) { FAIL("transformer_layer_shapes", "CPU backend unavailable"); return; }
+
     ModelConfig cfg = {
         .hidden_dim = 64, .n_heads = 4, .n_kv_heads = 4,
         .head_dim = 16, .n_layers = 1, .vocab_size = 100,
@@ -108,7 +130,7 @@ static void test_transformer_layer_shapes(void) {
     hidden.dtype = DTYPE_F32;
 
     /* Run transformer layer */
-    transformer_layer(&hidden, &lw, kv, 0, 0, scr, &cfg);
+    transformer_layer(&hidden, &lw, kv, 0, 0, scr, &cfg, k);
 
     /* Check no NaN/Inf */
     int has_nan = 0;
@@ -130,11 +152,16 @@ static void test_transformer_layer_shapes(void) {
     kv_cache_destroy(kv);
     scratch_destroy(scr);
     arena_destroy(arena);
+    backend_destroy(backend);
 }
 
 /* ---------- Test forward pass ---------- */
 
 static void test_forward_stub(void) {
+    Backend* backend = NULL;
+    const KernelVTable* k = cpu_kernels_or_fail(&backend);
+    if (!k) { FAIL("forward_stub", "CPU backend unavailable"); return; }
+
     ModelConfig cfg = {
         .hidden_dim = 64, .n_heads = 4, .n_kv_heads = 4,
         .head_dim = 16, .n_layers = 2, .vocab_size = 100,
@@ -168,7 +195,7 @@ static void test_forward_stub(void) {
 
     /* Run forward for 3 tokens (prefill) */
     int tokens[] = {1, 5, 10};
-    Tensor* logits = forward(&model, kv, scr, tokens, 3, 0);
+    Tensor* logits = forward(&model, kv, scr, tokens, 3, 0, k);
 
     if (!logits) {
         FAIL("forward_stub", "forward returned NULL");
@@ -186,7 +213,7 @@ static void test_forward_stub(void) {
 
     /* Run decode (single token) to test KV cache continuation */
     int tok2 = 7;
-    Tensor* logits2 = forward(&model, kv, scr, &tok2, 1, 3);
+    Tensor* logits2 = forward(&model, kv, scr, &tok2, 1, 3, k);
     if (!logits2) {
         FAIL("forward_decode", "decode forward returned NULL");
     } else {
@@ -205,6 +232,8 @@ static void test_forward_stub(void) {
     kv_cache_destroy(kv);
     scratch_destroy(scr);
     arena_destroy(arena);
+
+    backend_destroy(backend);
 }
 
 /* ---------- Test sampler integration ---------- */

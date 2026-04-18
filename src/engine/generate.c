@@ -10,8 +10,8 @@
 #define _POSIX_C_SOURCE 199309L  /* for clock_gettime, CLOCK_MONOTONIC */
 
 #include "engine.h"
+#include "backend.h"
 #include "memory.h"
-#include "kernels.h"
 #include "tokenizer.h"
 
 #include <stdio.h>
@@ -27,10 +27,62 @@ static double time_ms(void) {
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
 
+static const char* backend_kind_str(BackendKind k) {
+    switch (k) {
+        case BACKEND_CPU:  return "cpu";
+        case BACKEND_CUDA: return "cuda";
+        case BACKEND_AUTO:
+        default:           return "auto";
+    }
+}
+
 /* ---------- Generate ---------- */
 
 void generate(const char* model_path, const char* prompt, int max_tokens,
-              float temperature, int top_k, float top_p) {
+              float temperature, int top_k, float top_p,
+              const BackendConfig* backend_cfg) {
+
+    BackendConfig cfg_local = {0};
+    if (backend_cfg) cfg_local = *backend_cfg;
+    else {
+        cfg_local.kind = BACKEND_CPU;
+        cfg_local.threads = 1;
+        cfg_local.device_id = 0;
+    }
+
+    /* Backend selection semantics:
+     * - BACKEND_CUDA: required, error if unavailable
+     * - BACKEND_CPU: forced
+     * - (Caller can implement AUTO by attempting CUDA then falling back to CPU)
+     */
+    BackendKind requested_kind = cfg_local.kind;
+    Backend* backend = backend_create(&cfg_local);
+    if (!backend && cfg_local.kind == BACKEND_CUDA) {
+        fprintf(stderr, "Error: CUDA backend requested but unavailable (build with USE_CUDA=1, and ensure a supported GPU/runtime)\n");
+        return;
+    }
+    if (!backend) {
+        /* Fallback to CPU for non-CUDA forced cases. */
+        cfg_local.kind = BACKEND_CPU;
+        backend = backend_create(&cfg_local);
+        if (!backend) {
+            fprintf(stderr, "Error: failed to create CPU backend\n");
+            return;
+        }
+    }
+    const KernelVTable* k = backend_kernels(backend);
+    if (!k) {
+        fprintf(stderr, "Error: backend returned NULL kernel vtable\n");
+        backend_destroy(backend);
+        return;
+    }
+
+    BackendKind selected = backend_kind(backend);
+    if (requested_kind == BACKEND_AUTO) {
+        printf("Selected backend: %s\n", backend_kind_str(selected));
+    } else {
+        printf("Backend: %s\n", backend_kind_str(selected));
+    }
 
     printf("Loading model: %s\n", model_path);
     double t0 = time_ms();
@@ -108,7 +160,7 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     /* ---- Prefill ---- */
     double t_prefill_start = time_ms();
 
-    Tensor* logits = forward(model, kv, scr, prompt_tokens, prompt_len, 0);
+    Tensor* logits = forward(model, kv, scr, prompt_tokens, prompt_len, 0, k);
     if (!logits) {
         fprintf(stderr, "Prefill forward pass failed\n");
         goto cleanup;
@@ -149,7 +201,7 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
         }
 
         /* Forward pass for single token */
-        logits = forward(model, kv, scr, &next_token, 1, pos);
+        logits = forward(model, kv, scr, &next_token, 1, pos, k);
         if (!logits) {
             fprintf(stderr, "\nForward pass failed at token %d\n", i);
             break;
@@ -201,4 +253,5 @@ cleanup:
     scratch_destroy(scr);
     arena_destroy(arena);
     free_model(model);
+    backend_destroy(backend);
 }

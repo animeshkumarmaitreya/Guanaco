@@ -78,6 +78,11 @@ Each person owns a coherent subsystem and ships tests from Day 1. Person D also 
 - **CLI plumbing (DONE 2026-04-18):** extend `CLIArgs` with `--device`, `--threads`, `--chat`; keep existing flags unchanged.
 - **Build switches (DONE 2026-04-18):** add `USE_CUDA ?= 0` and Makefile pthread wiring (via `USE_PTHREAD ?= 0`) so CUDA/threads work doesn’t fork the build system.
 - **MUST scaffolding + tests (DONE 2026-04-18):** add MUST-only stub folder layout (`src/backend/`, `src/kernels/cpu/`, `src/kernels/cuda/`, `src/threadpool/`) plus stub headers/sources for backend/quant/threadpool/chat/gpu-prefill/CUDA wrappers; wire new coverage tests into `make test` so the APIs stay buildable as real implementations land.
+- **Backend abstraction integration (DONE 2026-04-19):** wired backend selection and the `KernelVTable` end-to-end in the real runtime + engine tests:
+  - Engine hot path calls kernels via `const KernelVTable*` (no direct CPU kernel calls in engine).
+  - `generate()` creates/destroys the backend from a `BackendConfig` and prints the selected backend.
+  - `BACKEND_AUTO` support added to the backend layer.
+  - Makefile/test link sets updated to include backend objects and any vtable-referenced objects.
 
 ### 0.1) Agree on new/updated headers
 We will add one new header and minimally extend existing ones.
@@ -91,6 +96,7 @@ We will add one new header and minimally extend existing ones.
 #include "types.h"
 
 typedef enum {
+    BACKEND_AUTO = -1,
     BACKEND_CPU = 0,
     BACKEND_CUDA = 1,
 } BackendKind;
@@ -132,6 +138,8 @@ const KernelVTable* backend_kernels(const Backend* b);
 BackendKind         backend_kind(const Backend* b);
 ```
 
+**Implementation note (current repo):** `backend_create(NULL)` defaults to `BACKEND_AUTO`. The CUDA backend currently returns `NULL` (stub), so AUTO selects CPU until Phase A lands.
+
 **Why we add `gemm_f32_nn`:** attention context computation needs $\text{ctx}(T,d) = \text{scores}(T,\text{seq}) \times V(\text{seq},d)$ where V is naturally stored row-major as `(seq_len, head_dim)` and must be treated as `(K,N)` for standard GEMM. The existing `gemm_f32()` computes $A\times B^T$ and cannot express `scores × V` without materializing `V^T` into scratch every head.
 
 #### Update: `src/include/tokenizer.h`
@@ -156,14 +164,17 @@ Engine APIs will accept a backend context (non-optional for maintainability):
 ModelWeights* load_model(const char* path, Arena* arena);
 void free_model(ModelWeights* model);
 
+void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
+                       int layer, int pos, Scratch* scr, ModelConfig* cfg,
+                       const KernelVTable* k);
+
 Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
                 int* token_ids, int n_tokens, int pos,
                 const KernelVTable* k);
 
 void generate(const char* model_path, const char* prompt, int max_tokens,
               float temperature, int top_k, float top_p,
-              const KernelVTable* k,
-              BackendKind backend_kind);
+              const BackendConfig* backend_cfg);
 
 void chat_repl(const char* model_path, int max_tokens, float temperature,
                int top_k, float top_p, const KernelVTable* k,
@@ -171,6 +182,8 @@ void chat_repl(const char* model_path, int max_tokens, float temperature,
 ```
 
 > Important: we pass `KernelVTable*` rather than `Backend*` into hot functions to keep call overhead minimal (one pointer deref).
+
+**Implementation note (current repo):** `generate()` owns backend lifetime and passes the vtable into `forward()`/`transformer_layer()`. This keeps `main.c` thin and centralizes backend selection/printing.
 
 #### Update: `src/include/types.h` for quantization
 Extend `DataType` to represent K-quant types we will actually see:
@@ -555,17 +568,26 @@ For quantized Llama-3.1 models:
 
 ### Task D4: Integration
 - Ensure CLI selects backend and threads.
-- Ensure forward/generate/chat all accept `KernelVTable*`.
+- Ensure hot engine functions accept `KernelVTable*` (keep call overhead minimal).
+- Decide whether `generate()` accepts a vtable or a config; current repo uses `BackendConfig*` so `generate()` can own backend lifetime.
 - Ensure CPU-only build still runs fully.
+
+**Status (DONE 2026-04-19; partial):**
+- DONE: `--device auto|cpu|cuda` maps into `BackendConfig` in `src/main.c` and reaches `generate()`.
+- DONE: engine hot path uses `KernelVTable` dispatch; engine tests also exercise the vtable path.
+- DONE: `BACKEND_AUTO` semantics implemented in backend layer.
+- DONE: build/test link sets updated so backend/vtable symbols resolve.
+- NOTE (important): because `backend_cpu_create()` wires `gemm_f32_nn` and quant matvec hooks into the vtable, any binary that links the backend must also link the object files that define those symbols (even if the engine doesn’t call them yet).
+- TODO: chat wiring (REPL) and GPU prefill are not integrated yet.
 
 ---
 
 ## Integration Milestones (priority-ordered)
 
 ### Milestone 1 — Backend abstraction + CPU correctness (enables everything)
-- Backend vtable created.
-- CPU backend wired.
-- Attention-as-GEMM refactor passes existing tests.
+- Backend vtable created. *(DONE 2026-04-19)*
+- CPU backend wired. *(DONE 2026-04-19)*
+- Attention-as-GEMM refactor passes existing tests. *(TODO)*
 
 ### Milestone 2 — Quantized CPU decode (must for chosen models)
 - Loader recognizes Q4_K and Q8_0.

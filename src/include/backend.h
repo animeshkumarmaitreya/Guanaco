@@ -7,10 +7,11 @@
  * Backend abstraction (MUST)
  *
  * Goal: engine code calls kernels via a selected backend (CPU/CUDA).
- * This header is additive scaffolding; nothing in the current build depends on it yet.
+ * BACKEND_AUTO implements: try CUDA (if compiled in), else CPU.
  *============================================================================*/
 
 typedef enum {
+    BACKEND_AUTO = -1,
     BACKEND_CPU  = 0,
     BACKEND_CUDA = 1,
 } BackendKind;

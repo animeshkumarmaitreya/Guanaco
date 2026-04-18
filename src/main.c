@@ -6,6 +6,7 @@
 
 #include "engine.h"
 #include "tokenizer.h"
+#include "backend.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -36,8 +37,22 @@ int main(int argc, char** argv) {
     printf("  Threads:     %d\n", args.threads);
     printf("---\n");
 
+    BackendConfig backend_cfg = {0};
+    backend_cfg.threads = args.threads;
+    backend_cfg.device_id = 0;
+
+    /* Backend selection is centralized in backend_create(); DEVICE_AUTO maps to BACKEND_AUTO. */
+    if (args.device == DEVICE_CUDA) {
+        backend_cfg.kind = BACKEND_CUDA;
+    } else if (args.device == DEVICE_CPU) {
+        backend_cfg.kind = BACKEND_CPU;
+    } else {
+        backend_cfg.kind = BACKEND_AUTO;
+    }
+
     generate(args.model_path, args.prompt, args.max_tokens,
-             args.temperature, args.top_k, args.top_p);
+             args.temperature, args.top_k, args.top_p,
+             &backend_cfg);
 
     return 0;
 }
