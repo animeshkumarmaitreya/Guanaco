@@ -165,12 +165,6 @@ static int reader_check(Reader* r, size_t bytes) {
     return (r->pos + bytes <= r->size);
 }
 
-static uint8_t read_u8(Reader* r) {
-    uint8_t v = r->data[r->pos];
-    r->pos += 1;
-    return v;
-}
-
 static uint32_t read_u32(Reader* r) {
     uint32_t v;
     memcpy(&v, r->data + r->pos, 4);

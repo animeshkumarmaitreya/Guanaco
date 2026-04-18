@@ -14,7 +14,7 @@ The goal is to extend functionality in ways that are strongly aligned with a sys
 - Orchestration: [src/engine/generate.c](src/engine/generate.c) (load model → allocators → KV → tokenize → prefill → decode loop).
 - Forward pass & transformer layer: [src/engine/engine.c](src/engine/engine.c) (`forward()` and `transformer_layer()`).
 - GGUF loader: [src/engine/loader.c](src/engine/loader.c) mmaps weights and builds `ModelWeights` + `Tensor` views.
-- Kernels: stateless ops declared in [src/include/kernels.h](src/include/kernels.h), implemented in [src/kernels/kernels.c](src/kernels/kernels.c).
+- Kernels: stateless ops declared in [src/include/kernels.h](src/include/kernels.h), implemented in [src/kernels/cpu/kernels_cpu.c](src/kernels/cpu/kernels_cpu.c).
 - Memory/KV: Arena + Scratch + KV cache in [src/include/memory.h](src/include/memory.h) and [src/memory/](src/memory/).
 
 **Important implementation details (affect extensions)**
@@ -146,7 +146,7 @@ Support quantized GGUF models while keeping the runtime simple.
 ### Where to integrate
 
 - Dequant path: [src/engine/loader.c](src/engine/loader.c)
-- Optional quant kernels: [src/kernels/kernels.c](src/kernels/kernels.c)
+- Optional kernels: [src/kernels/cpu/kernels_cpu.c](src/kernels/cpu/kernels_cpu.c)
 
 ### Verification
 
@@ -262,7 +262,7 @@ Scale throughput on multicore CPUs without large dependencies.
 
 ### Where to integrate
 
-- Kernels: [src/kernels/kernels.c](src/kernels/kernels.c)
+- Kernels: [src/kernels/cpu/kernels_cpu.c](src/kernels/cpu/kernels_cpu.c)
 - Attention loop: [src/engine/engine.c](src/engine/engine.c)
 - Build: [Makefile](Makefile) add `-pthread`
 

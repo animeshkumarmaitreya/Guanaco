@@ -47,6 +47,23 @@ typedef struct {
     size_t   byte_size;         /* authoritative size in bytes (esp. for quant); 0 if unknown */
 } Tensor;
 
+/* Whether the tensor is contiguous row-major (C-order) as described by shape/stride.
+ * Note: many kernels in this repo currently assume contiguous row-major buffers and
+ * effectively ignore stride for performance. Use this helper in debug asserts to
+ * catch accidental use of strided/views early.
+ */
+static inline int tensor_is_contiguous_row_major(const Tensor* t) {
+    if (t == NULL) return 0;
+    if (t->ndim <= 0 || t->ndim > MAX_DIMS) return 0;
+    int expected = 1;
+    for (int i = t->ndim - 1; i >= 0; i--) {
+        if (t->shape[i] <= 0) return 0;
+        if (t->stride[i] != expected) return 0;
+        expected *= t->shape[i];
+    }
+    return 1;
+}
+
 /* Convenience: total number of elements */
 static inline int tensor_numel(const Tensor* t) {
     int n = 1;

@@ -88,14 +88,14 @@ Only after the above are merged should the heavier work (CUDA/quant/threading/re
 - Loader: `src/engine/loader.c` mmaps GGUF and populates `ModelWeights`.
 - Forward: `src/engine/engine.c`
 - KV cache: `src/memory/kv_cache.c` head-major FP32.
-- Kernels: `src/kernels/kernels.c` (CPU AVX2).
+- Kernels: `src/kernels/cpu/kernels_cpu.c` (CPU AVX2/FMA).
 - Tokenizer/sampling/CLI: `src/tokenizer/tokenizer.c`
 
 **Important baseline constraint:**
-- Linear layers currently use `gemm_f32()` (implemented in `src/kernels/kernels.c`) with weights stored row-major as `(N, K)` and computed as:
+- Linear layers currently use `gemm_f32()` (implemented in `src/kernels/cpu/kernels_cpu.c`) with weights stored row-major as `(N, K)` and computed as:
   - $C(M,N) = A(M,K) \times B(N,K)^T$ (i.e., dot product against *rows* of the weight matrix).
   - Status: `src/include/kernels.h` docs have been aligned to match this contract.
-- Attention is *not* GEMM-based yet: it uses explicit dot-product loops for scores and context.
+- Attention is GEMM-based: scores and context are computed via `gemm_f32()` and `gemm_f32_nn()`.
 
 **Token ID correctness prerequisite (Llama-3.1 GGUF):**
 - BOS/EOS ids are parsed from GGUF metadata into `ModelConfig` and used by both tokenizer and generation. *(DONE 2026-04-18)*
@@ -125,16 +125,16 @@ Key design choices:
 
 ### 2.3 Implementation layout
 
-Keep existing CPU kernels where they are (today: `src/kernels/kernels.c`) and add new files around them. Do **not** move or rename existing kernel files as part of this feature set.
+CPU kernels live under `src/kernels/cpu/`.
 
 Proposed minimal additive layout:
 
 ```
 src/backend/backend.c          // backend_create/destroy, selects CPU/CUDA
-src/backend/cpu_backend.c      // vtable points at functions implemented in src/kernels/kernels.c
+src/backend/cpu_backend.c      // vtable points at functions implemented in src/kernels/cpu/kernels_cpu.c
 src/backend/cuda_backend.c     // vtable points at CUDA implementations
 
-src/kernels/kernels.c          // CPU kernels (existing) + new CPU quant matvecs + optional threadpool
+src/kernels/cpu/kernels_cpu.c  // CPU kernels (AVX2/FMA) + optional threadpool
 src/kernels/cuda/kernels_cuda.cu  // CUDA kernels (new)
 src/kernels/cuda/kernels_cuda.h   // C-callable wrappers (new)
 
@@ -196,8 +196,8 @@ Changes touched (implementation artifacts):
 
 ### 2.8 Still incomplete (must be implemented later)
 
-- CPU attention-as-GEMM refactor is not implemented yet (engine still uses explicit dot-product loops for attention).
-- `gemm_f32_nn()` is still a stub and not used by the engine yet; it must be implemented before attention-as-GEMM can land.
+- CPU attention-as-GEMM refactor is implemented and routed through the backend vtable. *(DONE 2026-04-19)*
+- `gemm_f32_nn()` is implemented in `src/kernels/cpu/gemm_f32_nn.c`. *(DONE 2026-04-19)*
 - Phase A GPU prefill (and optional Phase C full GPU forward) are not implemented.
 - Quant Phase B kernels are still stubs (matvec functions currently return failure); loader/runtime work remains.
 - Golden-data consumption in C tests (loading `golden_data/*.bin` and diffing tensors) is not implemented.
@@ -253,6 +253,8 @@ We need **two** GEMM variants (one exists today, one must be added):
 - In the current repo, GEMM kernels assume contiguous row-major buffers and effectively ignore `Tensor.stride[]`.
 - `Q` is stored as `(T, H)`; a per-head slice `Q_h` is strided by `H` across rows and is *not* a contiguous `(T, head_dim)` matrix.
 - Therefore, for each head, pack `Q_h` into a contiguous scratch matrix before calling `gemm_f32()`.
+- Treat `Tensor.stride[]` as a debug-time validation aid, not a general strided-tensor contract: only pass tensors that are contiguous row-major (i.e., `tensor_is_contiguous_row_major()` is true) into the current kernel implementations.
+- **Quantization interaction (future Phase B):** quantized tensors must never be passed to FP32 GEMM kernels. Instead, centralize all linear ops behind a dispatch helper that selects quant matvec when `W->dtype` is quant, and FP32 GEMM only when `W->dtype` is float. (Debug builds should assert `dtype==DTYPE_F32`/contiguity at FP32 GEMM boundaries to catch accidental mixing.)
 
 Scratch allocations (per layer):
 - Q, K, V projections: `T*H`, `T*kv_dim`, `T*kv_dim`
@@ -307,6 +309,8 @@ Hard requirement: any quant tensor must carry an authoritative `byte_size` (from
 
 ### 5.3 Engine dispatch changes (required)
 Introduce a single helper used by all linear ops:
+
+**Status (current repo):** implemented as `linear_dispatch()` in `src/engine/engine.c` and all existing linear layers (Q/K/V, Wo, MLP, lm_head) route through it. It is **FP32-only** today and fails fast on quant dtypes; Phase B will extend this helper to call quant matvecs.
 
 ```c
 // Pseudocode

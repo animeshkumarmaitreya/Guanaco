@@ -8,14 +8,29 @@
  * 
  * All kernels are STATELESS: they read inputs, write outputs, never allocate.
  * All buffer pointers must be 64-byte aligned.
+ *
+ * Layout contract (important):
+ * - Today, CPU kernels assume contiguous row-major buffers.
+ * - `Tensor.stride[]` is primarily debug metadata; many kernels effectively
+ *   ignore it for performance and will misbehave on strided/views.
+ * - If you need to operate on a strided slice, pack/copy into a contiguous
+ *   scratch tensor before calling kernels.
  *============================================================================*/
 
 /* Matrix multiply (matches GGUF weight layout): C = A × B^T
- * A: (M, K) row-major
- * B: (N, K) row-major (each row is one output feature / one vector of length K)
- * C: (M, N) row-major
  *
- * This is equivalent to computing a batch of dot-products between rows of A and rows of B.
+ * Naming note:
+ * - The name `gemm_f32` is kept for historical/compatibility reasons.
+ * - Semantically, it behaves like a GEMM where the right operand is treated as
+ *   transposed: B is stored as (N, K) but used as B^T.
+ * - This matches GGUF weight layout (rows = output features), so the runtime
+ *   can compute dot-products against weight rows without materializing a
+ *   transposed copy.
+ *
+ * Contract:
+ * - A: (M, K) row-major
+ * - B: (N, K) row-major (each row is one output feature / vector of length K)
+ * - C: (M, N) row-major
  */
 void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C);
 

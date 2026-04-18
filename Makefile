@@ -39,7 +39,7 @@ STUB_ENGINE    = src/stubs/stub_engine.c
 
 # Real implementations
 REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c
-REAL_KERNELS   = src/kernels/kernels.c
+REAL_KERNELS   = src/kernels/cpu/kernels_cpu.c
 REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
 REAL_TOKENIZER = src/tokenizer/tokenizer.c
 
@@ -49,7 +49,6 @@ REAL_QUANT     = src/kernels/cpu/quant_matvec_q8_0.c src/kernels/cpu/quant_matve
 # Backend + threading scaffolding
 REAL_BACKEND   = src/backend/backend.c src/backend/cpu_backend.c src/backend/cuda_backend.c
 REAL_THREADPOOL = src/threadpool/threadpool.c
-REAL_KERNELS_EXT = src/kernels/cpu/gemm_f32_nn.c
 
 # Active per module — swap STUB ↔ REAL as each person finishes
 KERNELS   = $(REAL_KERNELS)
@@ -65,9 +64,9 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 # ---- Main binary ----
-# Note: backend_cpu_create wires gemm_f32_nn + quant matvec hooks into the vtable,
+# Note: backend_cpu_create wires quant matvec hooks into the vtable,
 # so we must link those objects as well even if the engine doesn't call them yet.
-$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_KERNELS_EXT) $(REAL_QUANT) | $(BUILD)
+$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Test binaries ----
@@ -80,7 +79,7 @@ $(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
 $(BUILD)/test_tokenizer: tests/test_tokenizer.c $(REAL_TOKENIZER) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_KERNELS_EXT) $(REAL_QUANT) | $(BUILD)
+$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) | $(BUILD)
@@ -89,7 +88,7 @@ $(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) | $(BUILD)
 $(BUILD)/test_e2e_smoke: tests/test_e2e_smoke.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_KERNELS_EXT) $(REAL_QUANT) | $(BUILD)
+$(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_threadpool: tests/test_threadpool.c $(REAL_THREADPOOL) | $(BUILD)

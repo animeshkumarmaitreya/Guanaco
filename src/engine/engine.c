@@ -61,10 +61,61 @@ static Tensor make_view(void* data, int ndim, int d0, int d1, int d2) {
     return t;
 }
 
+/* ---------- Linear dispatch (single integration point for Phase B quant) ---------- */
+
+static void linear_dispatch(const Tensor* X, const Tensor* W, Tensor* Y, const KernelVTable* k) {
+    assert(X != NULL && W != NULL && Y != NULL);
+    assert(k != NULL);
+
+#ifndef NDEBUG
+    assert(X->data != NULL && W->data != NULL && Y->data != NULL);
+    assert(X->ndim == 2);
+    assert(W->ndim == 2);
+    assert(Y->ndim == 2);
+    assert(X->dtype == DTYPE_F32);
+    assert(Y->dtype == DTYPE_F32);
+    assert(tensor_is_contiguous_row_major(X));
+    assert(tensor_is_contiguous_row_major(W));
+    assert(tensor_is_contiguous_row_major(Y));
+    assert(X->shape[1] == W->shape[1]);
+    assert(Y->shape[0] == X->shape[0]);
+    assert(Y->shape[1] == W->shape[0]);
+#endif
+
+    /* Today: loader enforces F32-only weights. This switch is here so Phase B
+     * can integrate quant matvec at a single call site. */
+    if (W->dtype == DTYPE_F32) {
+        assert(k->gemm_f32 != NULL);
+        k->gemm_f32(X, W, Y);
+        return;
+    }
+
+    /* Phase B (quant) will land here:
+     * - If X is (1, K) and W is quant, call k->matvec_* to compute (1, N).
+     * - Prefill can fall back to per-row matvec for correctness.
+     */
+#ifndef NDEBUG
+    assert(!"linear_dispatch: quant weights not supported yet (Phase B TODO)");
+#else
+    fprintf(stderr, "linear_dispatch: quant weights not supported yet (dtype=%d)\n", (int)W->dtype);
+    abort();
+#endif
+}
+
 /* ---------- Embedding lookup ---------- */
 
 static void embedding_lookup(const Tensor* embedding, int* token_ids, int n_tokens,
                               Tensor* output) {
+#ifndef NDEBUG
+    assert(embedding != NULL && output != NULL);
+    assert(embedding->dtype == DTYPE_F32);
+    assert(output->dtype == DTYPE_F32);
+    assert(embedding->ndim == 2);
+    assert(output->ndim == 2);
+    assert(tensor_is_contiguous_row_major(embedding));
+    assert(tensor_is_contiguous_row_major(output));
+    assert(output->shape[1] == embedding->shape[1]);
+#endif
     int H = embedding->shape[1];
     float* emb_data = (float*)embedding->data;
     float* out_data = (float*)output->data;
@@ -83,6 +134,7 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
                        const KernelVTable* k) {
     assert(k != NULL);
     assert(k->gemm_f32 != NULL);
+    assert(k->gemm_f32_nn != NULL);
     assert(k->rmsnorm != NULL);
     assert(k->softmax_inplace != NULL);
     assert(k->silu_inplace != NULL);
@@ -113,9 +165,9 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
     Tensor* K = scratch_tensor(scr, 2, T, kv_dim, 0, 0);
     Tensor* V = scratch_tensor(scr, 2, T, kv_dim, 0, 0);
 
-    k->gemm_f32(normed, weights->wq, Q);   /* (T, H) × (H, H) = (T, H) */
-    k->gemm_f32(normed, weights->wk, K);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
-    k->gemm_f32(normed, weights->wv, V);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
+    linear_dispatch(normed, weights->wq, Q, k);   /* (T, H) × (H, H) = (T, H) */
+    linear_dispatch(normed, weights->wk, K, k);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
+    linear_dispatch(normed, weights->wv, V, k);   /* (T, H) × (H, kv_dim) = (T, kv_dim) */
 
     /* ---- Step 4: RoPE on Q and K ---- */
     for (int t = 0; t < T; t++) {
@@ -144,72 +196,99 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
     Tensor* K_cached = kv_cache_get_k(kv, layer, seq_len);  /* (n_kv_heads, seq_len, head_dim) */
     Tensor* V_cached = kv_cache_get_v(kv, layer, seq_len);  /* (n_kv_heads, seq_len, head_dim) */
 
+#ifndef NDEBUG
+    assert(K_cached != NULL && V_cached != NULL);
+    assert(K_cached->dtype == DTYPE_F32);
+    assert(V_cached->dtype == DTYPE_F32);
+    assert(K_cached->ndim == 3);
+    assert(V_cached->ndim == 3);
+    /* Expect head-major contiguous cache: (n_kv_heads, seq_len, head_dim) */
+    assert(K_cached->shape[0] == n_kv_heads);
+    assert(K_cached->shape[1] == seq_len);
+    assert(K_cached->shape[2] == head_dim);
+    assert(V_cached->shape[0] == n_kv_heads);
+    assert(V_cached->shape[1] == seq_len);
+    assert(V_cached->shape[2] == head_dim);
+    assert(K_cached->stride[2] == 1);
+    assert(V_cached->stride[2] == 1);
+    assert(K_cached->stride[1] == head_dim);
+    assert(V_cached->stride[1] == head_dim);
+#endif
+
     /* ---- Step 7-10: Multi-head attention ---- */
     Tensor* attn_output = scratch_tensor(scr, 2, T, H, 0, 0);
 
     float scale = 1.0f / sqrtf((float)head_dim);
 
+    /* Reusable temporaries to avoid per-head scratch blow-up.
+     * We overwrite these buffers for each head. */
+    Tensor* q_pack = scratch_tensor(scr, 2, T, head_dim, 0, 0);
+    Tensor* scores = scratch_tensor(scr, 2, T, seq_len, 0, 0);
+    Tensor* ctx = scratch_tensor(scr, 2, T, head_dim, 0, 0);
+
+#ifndef NDEBUG
+    assert(tensor_is_contiguous_row_major(q_pack));
+    assert(tensor_is_contiguous_row_major(scores));
+    assert(tensor_is_contiguous_row_major(ctx));
+    assert(tensor_is_contiguous_row_major(attn_output));
+    assert(tensor_is_contiguous_row_major(Q));
+#endif
+
+    float* q_pack_data = (float*)q_pack->data;
+    float* scores_data = (float*)scores->data;
+    float* ctx_data = (float*)ctx->data;
+    float* attn_data = (float*)attn_output->data;
+    float* Q_data = (float*)Q->data;
+
     for (int h = 0; h < n_heads; h++) {
-        int kv_h = h / heads_per_kv;  /* GQA: which KV head this Q head maps to */
+        const int kv_h = h / heads_per_kv;  /* GQA: which KV head this Q head maps to */
 
-        /* Q for this head: (T, head_dim) */
-        float* q_h = (float*)Q->data + h * head_dim;  /* stride = H per row */
-        /* K for this head from cache: (seq_len, head_dim) */
-        float* k_h = (float*)K_cached->data + kv_h * K_cached->stride[0] * (int)sizeof(float) / (int)sizeof(float);
-        /* Actually, K_cached stride is in elements, so: */
-        k_h = (float*)K_cached->data + (size_t)kv_h * K_cached->stride[0];
+        /* Pack Q_h into a contiguous (T, head_dim) matrix.
+         * Q is stored as (T, H) so the per-head slice is strided by H per row. */
+        for (int tq = 0; tq < T; tq++) {
+            memcpy(q_pack_data + (size_t)tq * head_dim,
+                   Q_data + (size_t)tq * H + (size_t)h * head_dim,
+                   (size_t)head_dim * sizeof(float));
+        }
 
-        /* V for this head from cache: (seq_len, head_dim) */
+        /* K/V for this KV head from cache: underlying layout is head-major. */
+        float* k_h = (float*)K_cached->data + (size_t)kv_h * K_cached->stride[0];
         float* v_h = (float*)V_cached->data + (size_t)kv_h * V_cached->stride[0];
 
-        /* Step 7: scores = Q × Kᵀ / sqrt(d_k)
-         * For each query token t, compute scores against all seq_len positions */
-        float* scores = (float*)scratch_alloc(scr, T * seq_len * sizeof(float), 64);
+        Tensor K_head = make_view(k_h, 2, seq_len, head_dim, 0); /* (N=seq_len, K=head_dim) */
+        Tensor V_head = make_view(v_h, 2, seq_len, head_dim, 0); /* (K=seq_len, N=head_dim) */
 
+        /* Step 7: scores = Q × Kᵀ */
+        k->gemm_f32(q_pack, &K_head, scores); /* (T, head_dim) × (seq_len, head_dim) => (T, seq_len) */
+
+        /* Step 7b/8: scale + causal mask */
         for (int tq = 0; tq < T; tq++) {
-            float* q_row = q_h + (size_t)tq * H;  /* Q is (T, H), stride H between rows */
+            const int query_pos = pos + tq;
+            float* row = scores_data + (size_t)tq * seq_len;
             for (int s = 0; s < seq_len; s++) {
-                float* k_row = k_h + (size_t)s * head_dim;  /* K is (seq_len, head_dim) */
-                float dot = 0.0f;
-                for (int d = 0; d < head_dim; d++) {
-                    dot += q_row[d] * k_row[d];
-                }
-                scores[tq * seq_len + s] = dot * scale;
+                float v = row[s] * scale;
+                if (s > query_pos) v = -INFINITY;
+                row[s] = v;
             }
         }
 
-        /* Step 8: Causal mask — mask out future positions */
-        for (int tq = 0; tq < T; tq++) {
-            int query_pos = pos + tq;
-            for (int s = query_pos + 1; s < seq_len; s++) {
-                scores[tq * seq_len + s] = -INFINITY;
-            }
-        }
+        /* Step 9: softmax over last dim for each row */
+        k->softmax_inplace(scores, seq_len);
 
-        /* Step 9: Softmax over each query row */
-        for (int tq = 0; tq < T; tq++) {
-            Tensor score_row = make_view(scores + tq * seq_len, 1, seq_len, 0, 0);
-            k->softmax_inplace(&score_row, seq_len);
-        }
+        /* Step 10: ctx = scores × V  (standard GEMM: (T, seq_len) × (seq_len, head_dim)) */
+        k->gemm_f32_nn(scores, &V_head, ctx);
 
-        /* Step 10: context = scores × V — (T, seq_len) × (seq_len, head_dim) = (T, head_dim) */
+        /* Scatter ctx into the packed (T, H) attention output buffer */
         for (int tq = 0; tq < T; tq++) {
-            float* out_h = (float*)attn_output->data + tq * H + h * head_dim;
-            float* score_row = scores + tq * seq_len;
-
-            for (int d = 0; d < head_dim; d++) {
-                float sum = 0.0f;
-                for (int s = 0; s < seq_len; s++) {
-                    sum += score_row[s] * v_h[s * head_dim + d];
-                }
-                out_h[d] = sum;
-            }
+            memcpy(attn_data + (size_t)tq * H + (size_t)h * head_dim,
+                   ctx_data + (size_t)tq * head_dim,
+                   (size_t)head_dim * sizeof(float));
         }
     }
 
     /* ---- Step 11: Output projection ---- */
     Tensor* attn_proj = scratch_tensor(scr, 2, T, H, 0, 0);
-    k->gemm_f32(attn_output, weights->wo, attn_proj);  /* (T, H) × (H, H) = (T, H) */
+    linear_dispatch(attn_output, weights->wo, attn_proj, k);  /* (T, H) × (H, H) = (T, H) */
 
     /* ---- Step 12: Residual add ---- */
     k->residual_add(attn_proj, residual);
@@ -227,10 +306,10 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
     Tensor* up   = scratch_tensor(scr, 2, T, ff_dim, 0, 0);
 
     /* Step 15: gate = x × W_gate */
-    k->gemm_f32(normed2, weights->w_gate, gate);  /* (T, H) × (H, ff) = (T, ff) */
+    linear_dispatch(normed2, weights->w_gate, gate, k);  /* (T, H) × (H, ff) = (T, ff) */
 
     /* Step 16: up = x × W_up */
-    k->gemm_f32(normed2, weights->w_up, up);      /* (T, H) × (H, ff) = (T, ff) */
+    linear_dispatch(normed2, weights->w_up, up, k);      /* (T, H) × (H, ff) = (T, ff) */
 
     /* Step 17: SiLU(gate) */
     k->silu_inplace(gate);
@@ -240,7 +319,7 @@ void transformer_layer(Tensor* hidden, LayerWeights* weights, KVCache* kv,
 
     /* Step 19: down = gate × W_down */
     Tensor* down = scratch_tensor(scr, 2, T, H, 0, 0);
-    k->gemm_f32(gate, weights->w_down, down);     /* (T, ff) × (ff, H) = (T, H) */
+    linear_dispatch(gate, weights->w_down, down, k);     /* (T, ff) × (ff, H) = (T, H) */
 
     /* ---- Step 20: Residual add ---- */
     k->residual_add(down, residual);
@@ -283,7 +362,7 @@ Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
     Tensor last_view = make_view(last_hidden, 2, 1, H, 0);
 
     Tensor* logits = scratch_tensor(scr, 2, 1, cfg->vocab_size, 0, 0);
-    k->gemm_f32(&last_view, model->lm_head, logits);  /* (1, H) × (H, vocab_size) = (1, V) */
+    linear_dispatch(&last_view, model->lm_head, logits, k);  /* (1, H) × (H, vocab_size) = (1, V) */
 
     return logits;
 }

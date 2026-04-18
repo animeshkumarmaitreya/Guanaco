@@ -60,10 +60,10 @@ Each person owns a coherent subsystem and ships tests from Day 1. Person D also 
 ## Day 0 — Interfaces (2–4 hours, non-negotiable)
 
 ### 0.0) Repo reality check (prevents rework)
-- In the current codebase, `gemm_f32()` (implemented in `src/kernels/kernels.c`) computes:
+- In the current codebase, `gemm_f32()` (implemented in `src/kernels/cpu/kernels_cpu.c`) computes:
   - $C(M,N) = A(M,K) \times B(N,K)^T$ where `B` is stored row-major as `(N, K)` (this matches how GGUF weights are loaded: rows = out_features).
   - Status: `src/include/kernels.h` docs have been aligned to this contract.
-- Attention is still written with explicit dot-product loops in `src/engine/engine.c` (scores + context). The “attention-as-GEMM” refactor will:
+- Attention is implemented in GEMM form in `src/engine/engine.c` (scores + context). The attention-as-GEMM refactor uses:
   - use `gemm_f32()` for the score step ($Q\times K^T$), and
   - add **one** additional GEMM variant for the context step ($\text{scores}\times V$): standard $A\times B$.
 - Token IDs are now parsed from GGUF metadata: `bos_token_id`/`eos_token_id` live in `ModelConfig`, tokenizer uses `bos_token_id`, and generation terminates on `eos_token_id`. Chat turns must use `tokenize_no_bos()`.
@@ -83,6 +83,7 @@ Each person owns a coherent subsystem and ships tests from Day 1. Person D also 
   - `generate()` creates/destroys the backend from a `BackendConfig` and prints the selected backend.
   - `BACKEND_AUTO` support added to the backend layer.
   - Makefile/test link sets updated to include backend objects and any vtable-referenced objects.
+- **CPU attention-as-GEMM (DONE 2026-04-19):** refactored attention to compute scores/context via `gemm_f32()` + `gemm_f32_nn()` through the backend vtable; added an efficient contiguous `gemm_f32_nn()` implementation.
 
 ### 0.1) Agree on new/updated headers
 We will add one new header and minimally extend existing ones.
@@ -394,6 +395,8 @@ Also required for end-to-end correctness on the selected model variants:
 
 **MUST requirement:** correctness over speed; prefill can be slower.
 
+**Status (current repo):** the engine already routes linear ops through a single helper (`linear_dispatch()`), but it is FP32-only and fails fast on quant weights. Phase B will extend it to call `KernelVTable.matvec_q4k_f32` / `matvec_q8_0_f32`.
+
 ### Task B4: Model support checklist (Llama-3.1-8B)
 - Confirm loader maps these required tensor names:
   - `token_embd.weight`, `output.weight`, all `blk.*` tensors.
@@ -523,6 +526,10 @@ Finally scatter `ctx` into `attn_output`.
 - Be meticulous with strides. The KV cache tensors use `stride[]` in *elements*.
 - Softmax rows must handle all-masked rows (decode masking edge cases).
 - **Important:** the current `gemm_f32` / `gemm_f32_nn` implementations assume contiguous row-major buffers and effectively ignore `Tensor.stride[]`. Because `Q` is stored as `(T, H)`, a per-head slice is strided by `H` across rows; pack `Q_h` into a contiguous `(T, head_dim)` scratch matrix before calling GEMM.
+- Guardrails (current repo): debug builds assert contiguity (`tensor_is_contiguous_row_major()`) at GEMM boundaries, and the attention path explicitly packs `Q_h` so no strided views reach GEMM.
+- Quantization interaction (Phase B): quantized `Tensor` objects (Q4_K/Q8_0) must never be passed to FP32 GEMM. All linear ops should funnel through a single dispatch helper that selects quant matvec when `W->dtype` is quant.
+
+Status: *(DONE 2026-04-19)*
 
 ### Task D2 (MUST): CPU threads
 Add `--threads N`:
@@ -577,6 +584,7 @@ For quantized Llama-3.1 models:
 - DONE: engine hot path uses `KernelVTable` dispatch; engine tests also exercise the vtable path.
 - DONE: `BACKEND_AUTO` semantics implemented in backend layer.
 - DONE: build/test link sets updated so backend/vtable symbols resolve.
+- DONE: engine linear layers route through a single dtype-gated helper (`linear_dispatch()`), which is FP32-only today and is the single integration point for Phase B quant matvec dispatch.
 - NOTE (important): because `backend_cpu_create()` wires `gemm_f32_nn` and quant matvec hooks into the vtable, any binary that links the backend must also link the object files that define those symbols (even if the engine doesn’t call them yet).
 - TODO: chat wiring (REPL) and GPU prefill are not integrated yet.
 
@@ -587,7 +595,7 @@ For quantized Llama-3.1 models:
 ### Milestone 1 — Backend abstraction + CPU correctness (enables everything)
 - Backend vtable created. *(DONE 2026-04-19)*
 - CPU backend wired. *(DONE 2026-04-19)*
-- Attention-as-GEMM refactor passes existing tests. *(TODO)*
+- Attention-as-GEMM refactor passes existing tests. *(DONE 2026-04-19)*
 
 ### Milestone 2 — Quantized CPU decode (must for chosen models)
 - Loader recognizes Q4_K and Q8_0.
