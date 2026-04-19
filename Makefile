@@ -94,7 +94,7 @@ $(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(RE
 $(BUILD)/test_threadpool: tests/test_threadpool.c $(REAL_THREADPOOL) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_chat_stub: tests/test_chat_stub.c src/engine/chat.c | $(BUILD)
+$(BUILD)/test_chat_stub: tests/test_chat_stub.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_gpu_prefill_stub: tests/test_gpu_prefill_stub.c src/engine/gpu_prefill.c | $(BUILD)

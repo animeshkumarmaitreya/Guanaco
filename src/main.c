@@ -1,12 +1,13 @@
 /*============================================================================
  * main.c — Entry point
  *
- * Parses CLI args and calls generate().
+ * Parses CLI args and calls generate() or chat_repl().
  *============================================================================*/
 
 #include "engine.h"
 #include "tokenizer.h"
 #include "backend.h"
+#include "chat.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -26,17 +27,6 @@ int main(int argc, char** argv) {
     if (result == 1) return 0;   /* --help printed */
     if (result < 0)  return 1;   /* error */
 
-    printf("LLM Inference Runtime\n");
-    printf("  Model:       %s\n", args.model_path);
-    printf("  Prompt:      \"%s\"\n", args.prompt);
-    printf("  Max tokens:  %d\n", args.max_tokens);
-    printf("  Temperature: %.2f\n", args.temperature);
-    printf("  Top-k:       %d\n", args.top_k);
-    printf("  Top-p:       %.2f\n", args.top_p);
-    printf("  Device:      %s\n", device_kind_str(args.device));
-    printf("  Threads:     %d\n", args.threads);
-    printf("---\n");
-
     BackendConfig backend_cfg = {0};
     backend_cfg.threads = args.threads;
     backend_cfg.device_id = 0;
@@ -50,9 +40,29 @@ int main(int argc, char** argv) {
         backend_cfg.kind = BACKEND_AUTO;
     }
 
-    generate(args.model_path, args.prompt, args.max_tokens,
-             args.temperature, args.top_k, args.top_p,
-             &backend_cfg);
+    /* ---- Route to chat mode or generate mode ---- */
+    if (args.chat) {
+        /* Chat REPL: interactive multi-turn conversation */
+        return chat_repl(&backend_cfg, args.model_path,
+                         args.max_tokens, args.temperature,
+                         args.top_k, args.top_p);
+    } else {
+        /* Single-turn generation */
+        printf("LLM Inference Runtime\n");
+        printf("  Model:       %s\n", args.model_path);
+        printf("  Prompt:      \"%s\"\n", args.prompt);
+        printf("  Max tokens:  %d\n", args.max_tokens);
+        printf("  Temperature: %.2f\n", args.temperature);
+        printf("  Top-k:       %d\n", args.top_k);
+        printf("  Top-p:       %.2f\n", args.top_p);
+        printf("  Device:      %s\n", device_kind_str(args.device));
+        printf("  Threads:     %d\n", args.threads);
+        printf("---\n");
 
-    return 0;
+        generate(args.model_path, args.prompt, args.max_tokens,
+                 args.temperature, args.top_k, args.top_p,
+                 &backend_cfg);
+
+        return 0;
+    }
 }
