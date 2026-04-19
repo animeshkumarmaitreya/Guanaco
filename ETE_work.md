@@ -50,6 +50,7 @@ These are small, high-leverage changes that prevent later rework and unblock par
 3) **Tokenizer entry point for incremental chat**
 - [x] Keep existing `tokenize()` behavior for single-shot generation. *(DONE 2026-04-18)*
 - [x] Add a second entry point for chat turns that does not inject BOS each time (`tokenize_no_bos()`), so chat can append tokens safely. *(DONE 2026-04-18)*
+- [x] Define chat BOS policy: inject BOS exactly once at conversation start, and never per-turn; after a context reset/restart, inject BOS again. *(DONE 2026-04-19)*
 
 4) **CLI + Makefile scaffolding**
 - [x] Extend `CLIArgs` + `cli_parse()` to include `--device`, `--threads`, and `--chat` (and optionally `--seed`, `--ctx-window` later). *(DONE 2026-04-18)*
@@ -99,7 +100,8 @@ Only after the above are merged should the heavier work (CUDA/quant/threading/re
 
 **Token ID correctness prerequisite (Llama-3.1 GGUF):**
 - BOS/EOS ids are parsed from GGUF metadata into `ModelConfig` and used by both tokenizer and generation. *(DONE 2026-04-18)*
-- `tokenize()` prepends BOS using `cfg->bos_token_id`; chat mode must use `tokenize_no_bos()` to avoid injecting BOS every turn. *(DONE 2026-04-18)*
+- `tokenize()` prepends BOS using `cfg->bos_token_id`; chat mode must avoid injecting BOS every turn.
+  - Policy: use `tokenize()` only when starting a new conversation (position 0), then `tokenize_no_bos()` for subsequent turns; after context reset, inject BOS again. *(DONE 2026-04-19)*
 
 **Non-F32 weights (current reality):**
 - The runtime kernels are FP32-only today.

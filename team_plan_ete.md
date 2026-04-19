@@ -66,12 +66,17 @@ Each person owns a coherent subsystem and ships tests from Day 1. Person D also 
 - Attention is implemented in GEMM form in `src/engine/engine.c` (scores + context). The attention-as-GEMM refactor uses:
   - use `gemm_f32()` for the score step ($Q\times K^T$), and
   - add **one** additional GEMM variant for the context step ($\text{scores}\times V$): standard $A\times B$.
-- Token IDs are now parsed from GGUF metadata: `bos_token_id`/`eos_token_id` live in `ModelConfig`, tokenizer uses `bos_token_id`, and generation terminates on `eos_token_id`. Chat turns must use `tokenize_no_bos()`.
+- Token IDs are now parsed from GGUF metadata: `bos_token_id`/`eos_token_id` live in `ModelConfig`, tokenizer uses `bos_token_id`, and generation terminates on `eos_token_id`.
+- Chat tokenization policy:
+  - Inject BOS exactly once at the beginning of a conversation.
+  - For subsequent turns, use `tokenize_no_bos()` to avoid BOS re-injection (KV reuse correctness).
+  - After a context reset/restart, inject BOS again for the new conversation.
 
 ### 0.0b) Pre-flight commits (must merge before parallel work)
 - **Kernel contract fix (DONE 2026-04-18):** updated `src/include/kernels.h` to correctly document `gemm_f32` as $A\times B^T$ with `B(N,K)` layout; updated kernel GEMM tests so `make test_kernels` validates the real contract; added debug asserts to `gemm_f32()` to enforce shapes/strides/dtypes in debug builds.
 - **Token IDs in config (DONE 2026-04-18):** add `bos_token_id` / `eos_token_id` to `ModelConfig`, populate from GGUF metadata, and use `cfg->eos_token_id` for EOS termination in generation.
 - **Chat-safe tokenization (DONE 2026-04-18):** added `tokenize_no_bos()` so chat turns don’t repeatedly inject BOS.
+- **Chat BOS-once semantics (DONE 2026-04-19):** chat uses `tokenize()` only when starting a conversation (position 0), and `tokenize_no_bos()` for later turns; after a context reset, chat re-tokenizes the next user turn with BOS.
 - **Sampler correctness (DONE 2026-04-18):** `sample_top_k()` / `sample_top_p()` are real implementations (no silent fallback), and `--help` documents `--top-k/--top-p`.
 - **Tensor byte sizing + dtype safety (DONE 2026-04-18):** `Tensor.byte_size`/`tensor_nbytes()` added; loader computes block-aware `byte_size` and fails fast on unsupported dtypes (prevents treating quant bytes as F32). Runtime remains FP32-only until Phase B quant.
 - **Extra debug asserts (DONE 2026-04-18):** added shape/dtype asserts in engine embedding lookup, KV cache append, and non-GEMM kernels.
@@ -458,7 +463,7 @@ Implementation: `src/engine/chat.c` + `src/main.c` routing
 **Features delivered:**
 - ✅ Load model once per session
 - ✅ Create Arena/Scratch/KV once, reused across turns
-- ✅ Tokenize user input without BOS (`tokenize_no_bos()`)
+- ✅ Tokenize user input without BOS per-turn (`tokenize_no_bos()`), while still injecting BOS once at conversation start
 - ✅ Forward pass with monotonic position tracking
 - ✅ Token sampling (greedy, temperature, top-k, top-p)
 - ✅ Context window overflow detection → automatic reset

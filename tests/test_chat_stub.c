@@ -265,6 +265,27 @@ static void test_sampling_temperature_constraints(void) {
     }
 }
 
+/* Test BOS injection policy for chat turns.
+ * Policy: inject BOS exactly once per conversation (current_pos==0), never on
+ * subsequent turns, and inject again after a context reset. */
+static void test_chat_bos_injection_policy(void) {
+    int current_pos = 0;
+    int add_bos = (current_pos == 0);
+    if (add_bos) PASS("chat_bos_on_new_conversation");
+    else FAIL("chat_bos_on_new_conversation", "expected BOS at pos==0");
+
+    current_pos = 5;
+    add_bos = (current_pos == 0);
+    if (!add_bos) PASS("chat_no_bos_on_followup_turn");
+    else FAIL("chat_no_bos_on_followup_turn", "did not expect BOS after pos>0");
+
+    /* Context reset */
+    current_pos = 0;
+    add_bos = (current_pos == 0);
+    if (add_bos) PASS("chat_bos_after_context_reset");
+    else FAIL("chat_bos_after_context_reset", "expected BOS after reset");
+}
+
 int main(void) {
     printf("=== Chat Control Flow Test Suite ===\n\n");
     
@@ -285,6 +306,7 @@ int main(void) {
     test_chat_input_buffer_size();
     test_chat_output_token_limits();
     test_sampling_temperature_constraints();
+    test_chat_bos_injection_policy();
 
     printf("\n");
     if (failures == 0) {

@@ -36,7 +36,8 @@ Tokenizer* tokenizer_create(const ModelConfig* cfg) {
     tok->vocab_size = cfg->vocab_size;
     tok->vocab = cfg->vocab_strings;
     tok->scores = cfg->vocab_scores;
-    tok->bos_token_id = (cfg->bos_token_id > 0) ? cfg->bos_token_id : 1;
+    /* Loader sets a default BOS; if a model legitimately uses BOS=0, respect it. */
+    tok->bos_token_id = (cfg->bos_token_id >= 0) ? cfg->bos_token_id : 1;
     return tok;
 }
 
@@ -396,8 +397,8 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
     }
 
     if (args->chat) {
-        fprintf(stderr, "Error: --chat is not implemented yet\n");
-        return -1;
+        /* Chat mode is implemented in src/engine/chat.c; parsing should
+         * succeed and main.c will route to chat_repl(). */
     }
 
     if (args->device == DEVICE_CUDA) {

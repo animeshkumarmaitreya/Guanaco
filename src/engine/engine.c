@@ -116,9 +116,21 @@ static void linear_dispatch(const Tensor *X, const Tensor *W, Tensor *Y,
     float *y_t = (float *)Y->data + t * out_dim;
 
     if (W->dtype == DTYPE_Q8_0) {
-      k->matvec_q8_0_f32(W, x_t, y_t);
+      assert(k->matvec_q8_0_f32 != NULL);
+      int ret = k->matvec_q8_0_f32(W, x_t, y_t);
+      if (ret != 0) {
+        fprintf(stderr, "linear_dispatch: matvec_q8_0_f32 failed (ret=%d)\n",
+                ret);
+        abort();
+      }
     } else if (W->dtype == DTYPE_Q4_K) {
-      k->matvec_q4k_f32(W, x_t, y_t);
+      assert(k->matvec_q4k_f32 != NULL);
+      int ret = k->matvec_q4k_f32(W, x_t, y_t);
+      if (ret != 0) {
+        fprintf(stderr, "linear_dispatch: matvec_q4k_f32 failed (ret=%d)\n",
+                ret);
+        abort();
+      }
     } else {
       fprintf(stderr,
               "linear_dispatch: quant weights not supported yet (dtype=%d)\n",
@@ -138,15 +150,33 @@ typedef struct {
 #pragma pack(pop)
 
 static inline float extract_f16_to_f32(uint16_t h) {
-  if (h == 0)
-    return 0.0f;
-  uint32_t sign = (h & 0x8000) << 16;
-  uint32_t exp = (h & 0x7c00) >> 10;
-  uint32_t frac = (h & 0x03ff);
-  uint32_t float_exp = exp + (127 - 15);
-  uint32_t r = sign | (float_exp << 23) | (frac << 13);
+  uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+  uint32_t exp = (h >> 10) & 0x1fu;
+  uint32_t frac = h & 0x03ffu;
+
+  uint32_t bits;
+  if (exp == 0) {
+    if (frac == 0) {
+      bits = sign;
+    } else {
+      /* Subnormal half: normalize the mantissa. */
+      uint32_t e = 127u - 15u + 1u;
+      while ((frac & 0x0400u) == 0) {
+        frac <<= 1;
+        e--;
+      }
+      frac &= 0x03ffu;
+      bits = sign | (e << 23) | (frac << 13);
+    }
+  } else if (exp == 31) {
+    /* Inf/NaN */
+    bits = sign | 0x7f800000u | (frac << 13);
+  } else {
+    bits = sign | ((exp + (127u - 15u)) << 23) | (frac << 13);
+  }
+
   float f;
-  memcpy(&f, &r, sizeof(float));
+  memcpy(&f, &bits, sizeof(float));
   return f;
 }
 

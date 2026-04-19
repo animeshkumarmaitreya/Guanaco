@@ -145,9 +145,13 @@ int chat_repl(const BackendConfig* backend_cfg,
             continue;
         }
 
-        /* ---- Tokenize user input (no BOS for incremental chat) ---- */
+        /* ---- Tokenize user input ----
+         * Inject BOS exactly once at the beginning of each conversation.
+         * Subsequent turns must not inject BOS (KV reuse correctness). */
         int user_tokens_len = 0;
-        int* user_tokens = tokenize_no_bos(tok, user_input, &user_tokens_len);
+        int* user_tokens = (current_pos == 0)
+                               ? tokenize(tok, user_input, &user_tokens_len)
+                               : tokenize_no_bos(tok, user_input, &user_tokens_len);
         if (!user_tokens || user_tokens_len == 0) {
             fprintf(stderr, "Tokenization failed\n");
             continue;
@@ -159,6 +163,21 @@ int chat_repl(const BackendConfig* backend_cfg,
             /* Reset KV cache for new conversation */
             current_pos = 0;
             scratch_reset(scr);
+
+            /* Re-tokenize with BOS for the new conversation context. */
+            free(user_tokens);
+            user_tokens_len = 0;
+            user_tokens = tokenize(tok, user_input, &user_tokens_len);
+            if (!user_tokens || user_tokens_len == 0) {
+                fprintf(stderr, "Tokenization failed\n");
+                continue;
+            }
+
+            if (user_tokens_len >= cfg->max_seq_len - 1) {
+                printf("Assistant: [Input too long for context window]\n");
+                free(user_tokens);
+                continue;
+            }
         }
 
         /* ---- Forward pass on user input ---- */

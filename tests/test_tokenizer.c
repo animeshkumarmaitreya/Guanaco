@@ -161,6 +161,28 @@ static void test_tokenizer_no_bos(void) {
     tokenizer_destroy(tok);
 }
 
+static void test_tokenizer_bos_id_zero(void) {
+    char* dummy[3] = {"<BOS>", "Hello", "H"};
+    ModelConfig cfg = { .vocab_size = 3, .vocab_strings = dummy, .bos_token_id = 0 };
+    Tokenizer* tok = tokenizer_create(&cfg);
+    if (!tok) { FAIL("tokenizer_bos_id_zero", "create failed"); return; }
+
+    int len = 0;
+    int* ids = tokenize(tok, "Hello", &len);
+    if (!ids) {
+        FAIL("tokenizer_bos_id_zero", "tokenize returned NULL");
+    } else if (len < 2) {
+        FAIL("tokenizer_bos_id_zero", "expected at least BOS + 1 token");
+    } else if (ids[0] != 0) {
+        FAIL("tokenizer_bos_id_zero", "expected BOS token id 0 to be used");
+    } else {
+        PASS("tokenizer_bos_id_zero");
+    }
+
+    free(ids);
+    tokenizer_destroy(tok);
+}
+
 static void test_detokenize(void) {
     char* dummy[100] = {0}; dummy[65] = "A";
     ModelConfig cfg = { .vocab_size = 100, .vocab_strings = dummy };
@@ -221,8 +243,15 @@ static void test_cli_chat_errors(void) {
     char* argv[] = {"main", "--model", "test.gguf", "--chat"};
     CLIArgs args;
     int result = cli_parse(4, argv, &args);
-    if (result == -1) PASS("cli_chat_errors");
-    else              FAIL("cli_chat_errors", "expected error for --chat (not implemented yet)");
+    if (result != 0) {
+        FAIL("cli_chat_parses", "expected successful parse for --chat");
+        return;
+    }
+    if (!args.chat) {
+        FAIL("cli_chat_parses", "expected args.chat=1");
+        return;
+    }
+    PASS("cli_chat_parses");
 }
 
 /* ---- Main ---- */
@@ -242,6 +271,7 @@ int main(void) {
     test_tokenizer_basic();
     test_tokenizer_empty();
     test_tokenizer_no_bos();
+    test_tokenizer_bos_id_zero();
     test_detokenize();
     test_cli_help();
     test_cli_missing_model();

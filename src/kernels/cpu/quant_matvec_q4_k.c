@@ -12,15 +12,31 @@ typedef struct {
 #pragma pack(pop)
 
 static inline float extract_f16_to_f32(uint16_t h) {
-  if (h == 0)
-    return 0.0f;
-  uint32_t sign = (h & 0x8000) << 16;
-  uint32_t exp = (h & 0x7c00) >> 10;
-  uint32_t frac = (h & 0x03ff);
-  uint32_t float_exp = exp + (127 - 15);
-  uint32_t r = sign | (float_exp << 23) | (frac << 13);
+  uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+  uint32_t exp = (h >> 10) & 0x1fu;
+  uint32_t frac = h & 0x03ffu;
+
+  uint32_t bits;
+  if (exp == 0) {
+    if (frac == 0) {
+      bits = sign;
+    } else {
+      uint32_t e = 127u - 15u + 1u;
+      while ((frac & 0x0400u) == 0) {
+        frac <<= 1;
+        e--;
+      }
+      frac &= 0x03ffu;
+      bits = sign | (e << 23) | (frac << 13);
+    }
+  } else if (exp == 31) {
+    bits = sign | 0x7f800000u | (frac << 13);
+  } else {
+    bits = sign | ((exp + (127u - 15u)) << 23) | (frac << 13);
+  }
+
   float f;
-  memcpy(&f, &r, sizeof(float));
+  memcpy(&f, &bits, sizeof(float));
   return f;
 }
 
@@ -36,6 +52,8 @@ static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d,
 }
 
 int matvec_q4k_f32(const Tensor *W_q4k, const float *x, float *y) {
+  if (W_q4k == NULL || x == NULL || y == NULL)
+    return -1;
   if (W_q4k->dtype != DTYPE_Q4_K || W_q4k->ndim != 2)
     return -1;
 
@@ -45,6 +63,11 @@ int matvec_q4k_f32(const Tensor *W_q4k, const float *x, float *y) {
     return -2;
 
   int num_blocks = num_cols / 256;
+  if (W_q4k->byte_size != 0) {
+    size_t need = (size_t)num_rows * (size_t)num_blocks * sizeof(block_q4_k);
+    if (need > W_q4k->byte_size)
+      return -3;
+  }
   const block_q4_k *blocks = (const block_q4_k *)W_q4k->data;
 
   for (int r = 0; r < num_rows; r++) {

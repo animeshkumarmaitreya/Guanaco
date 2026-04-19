@@ -168,10 +168,8 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
         }
     }
 
-    if (args->chat) {
-        fprintf(stderr, "Error: --chat is not implemented yet\n");
-        return -1;
-    }
+    /* Chat mode is implemented in the real engine; stub parsing should still
+     * accept the flag so CLI UX stays consistent. */
 
     if (args->device == DEVICE_CUDA) {
         fprintf(stderr, "Error: --device cuda requested but CUDA is not enabled in this build (try: make USE_CUDA=1)\n");
