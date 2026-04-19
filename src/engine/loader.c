@@ -483,6 +483,7 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         Tensor* t = (Tensor*)calloc(1, sizeof(Tensor));
         t->data = tdata;
         t->dtype = ggml_to_dtype(ti->ggml_type);
+        t->ggml_type = ti->ggml_type;
         t->ndim = ti->ndims;
         t->byte_size = tbytes;
 
@@ -581,6 +582,8 @@ ModelWeights* load_model(const char* path, Arena* arena) {
            (unsigned long)tensor_count, model->config.vocab_size);
 
     /* Validate that all layers have all required weights */
+    #define IS_VALID_WEIGHT(dt) ((dt) == DTYPE_F32 || (dt) == DTYPE_Q8_0 || (dt) == DTYPE_Q4_K)
+
     int valid = 1;
     for (int l = 0; l < cfg.n_layers; l++) {
         LayerWeights* lw = &model->layers[l];
@@ -588,21 +591,21 @@ ModelWeights* load_model(const char* path, Arena* arena) {
             fprintf(stderr, "Warning: layer %d missing attention weights\n", l);
             valid = 0;
         }
-        if ((lw->wq && lw->wq->dtype != DTYPE_F32) ||
-            (lw->wk && lw->wk->dtype != DTYPE_F32) ||
-            (lw->wv && lw->wv->dtype != DTYPE_F32) ||
-            (lw->wo && lw->wo->dtype != DTYPE_F32)) {
-            fprintf(stderr, "Error: layer %d has non-F32 attention weights (not supported yet)\n", l);
+        if ((lw->wq && !IS_VALID_WEIGHT(lw->wq->dtype)) ||
+            (lw->wk && !IS_VALID_WEIGHT(lw->wk->dtype)) ||
+            (lw->wv && !IS_VALID_WEIGHT(lw->wv->dtype)) ||
+            (lw->wo && !IS_VALID_WEIGHT(lw->wo->dtype))) {
+            fprintf(stderr, "Error: layer %d has unsupported attention weights\n", l);
             valid = 0;
         }
         if (!lw->w_gate || !lw->w_up || !lw->w_down) {
             fprintf(stderr, "Warning: layer %d missing MLP weights\n", l);
             valid = 0;
         }
-        if ((lw->w_gate && lw->w_gate->dtype != DTYPE_F32) ||
-            (lw->w_up && lw->w_up->dtype != DTYPE_F32) ||
-            (lw->w_down && lw->w_down->dtype != DTYPE_F32)) {
-            fprintf(stderr, "Error: layer %d has non-F32 MLP weights (not supported yet)\n", l);
+        if ((lw->w_gate && !IS_VALID_WEIGHT(lw->w_gate->dtype)) ||
+            (lw->w_up && !IS_VALID_WEIGHT(lw->w_up->dtype)) ||
+            (lw->w_down && !IS_VALID_WEIGHT(lw->w_down->dtype))) {
+            fprintf(stderr, "Error: layer %d has unsupported MLP weights\n", l);
             valid = 0;
         }
         if (!lw->rms_att || !lw->rms_ffn) {
@@ -611,7 +614,7 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         }
         if ((lw->rms_att && lw->rms_att->dtype != DTYPE_F32) ||
             (lw->rms_ffn && lw->rms_ffn->dtype != DTYPE_F32)) {
-            fprintf(stderr, "Error: layer %d has non-F32 norm weights (not supported yet)\n", l);
+            fprintf(stderr, "Error: layer %d has non-F32 norm weights (norm must be f32)\n", l);
             valid = 0;
         }
     }
@@ -619,8 +622,8 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         fprintf(stderr, "Warning: missing embedding weights\n");
         valid = 0;
     }
-    if (model->embedding && model->embedding->dtype != DTYPE_F32) {
-        fprintf(stderr, "Error: embedding is non-F32 (not supported yet)\n");
+    if (model->embedding && !IS_VALID_WEIGHT(model->embedding->dtype)) {
+        fprintf(stderr, "Error: embedding is unsupported dtype\n");
         valid = 0;
     }
     if (!model->rms_final) {
@@ -628,18 +631,20 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         valid = 0;
     }
     if (model->rms_final && model->rms_final->dtype != DTYPE_F32) {
-        fprintf(stderr, "Error: final norm is non-F32 (not supported yet)\n");
+        fprintf(stderr, "Error: final norm is non-F32 (must be f32)\n");
         valid = 0;
     }
-    if (model->lm_head && model->lm_head->dtype != DTYPE_F32) {
-        fprintf(stderr, "Error: lm_head is non-F32 (not supported yet)\n");
+    if (model->lm_head && !IS_VALID_WEIGHT(model->lm_head->dtype)) {
+        fprintf(stderr, "Error: lm_head is unsupported dtype\n");
         valid = 0;
     }
 
     if (!valid) {
-        fprintf(stderr, "load_model: model contains unsupported tensor dtypes; this runtime currently supports F32 weights only\n");
+        fprintf(stderr, "load_model: model contains unsupported tensor dtypes; supported: F32, Q8_0, Q4_K\n");
         goto fail_model;
     }
+
+    #undef IS_VALID_WEIGHT
 
     if (valid) {
         printf("All layer weights validated ✓\n");

@@ -335,33 +335,35 @@ tests/test_quant.c                     (new)
 ```
 
 ### Task B1: Loader — correct dtype mapping
+Status: ✅ **DONE** *(2026-04-19)*
+
 Extend `ggml_to_dtype()` so:
-- GGML_TYPE_Q4_K → DTYPE_Q4_K
-- GGML_TYPE_Q8_0 → DTYPE_Q8_0
-- GGML_TYPE_F16/F32 remain.
+- [x] GGML_TYPE_Q4_K → DTYPE_Q4_K
+- [x] GGML_TYPE_Q8_0 → DTYPE_Q8_0
+- [x] GGML_TYPE_F16/F32 remain.
 
 Also set in each Tensor:
-- `t->ggml_type = ti->ggml_type`
-- `t->byte_size = computed_from_dims_and_type`
+- [x] `t->ggml_type = ti->ggml_type`
+- [x] `t->byte_size = computed_from_dims_and_type`
 
 **Warning:** For quantized tensors, “num elements” is *logical* element count; the byte size is block-based:
 $$\text{bytes} = \frac{\text{numel}}{\text{block\_size}} \cdot \text{bytes\_per\_block}$$
 
 ### Task B2: CPU quantized matvec — Q8_0 and Q4_K
+Status: ✅ **DONE** *(2026-04-19)*
 
 #### Q8_0 matvec
-- Block size: 32.
-- Each block stores scale (f16) + 32 int8 values.
-- For each output row:
-  - Iterate blocks, dequant to float, accumulate dot.
+- [x] Block size: 32.
+- [x] Each block stores scale (f16) + 32 int8 values.
+- [x] For each output row: Iterate blocks, dequant to float, accumulate dot.
 
 #### Q4_K matvec
-- Block size: 256.
-- Q4_K is more complex (multiple scales and packed 4-bit values).
+- [x] Block size: 256.
+- [x] Q4_K is more complex (multiple scales and packed 4-bit values).
 
 **Authoritative layout (re-derived, keep in sync with upstream GGML):**
-- Q4_K stores 256 logical values per block (a “super-block”).
-- Each block contains:
+- [x] Q4_K stores 256 logical values per block (a “super-block”).
+- [x] Each block contains:
   - two FP16 scalars: `d` and `dmin` (super-block scale factors)
   - `12` bytes of packed 6-bit values encoding 8 per-subblock scales and 8 per-subblock mins (16 total u6 values)
   - `128` bytes of packed 4-bit quant values (2 values per byte)
@@ -369,43 +371,52 @@ $$\text{bytes} = \frac{\text{numel}}{\text{block\_size}} \cdot \text{bytes\_per\
 This is enough to implement the dequant path, but the exact u6 packing/unpacking order must be validated with an oracle.
 
 Implementation strategy:
-1. Define a local C struct matching GGML’s q4_k block layout (do **not** copy code; re-derive layout from documentation and validate).
-2. Implement a `dequant_q4k_block(float out[256], const void* block)`.
-3. In matvec:
+1. [x] Define a local C struct matching GGML’s q4_k block layout (do **not** copy code; re-derive layout from documentation and validate).
+2. [x] Implement a `dequant_q4k_block(float out[256], const void* block)`.
+3. [x] In matvec:
    - For each block: dequant into a small stack/temporary buffer, dot with `x`.
 
 **Validation strategy (must be in tests):**
-- Compare dequantized blocks against llama.cpp (oracle) for 100 random blocks extracted from the real GGUF file.
+- [x] Compare dequantized blocks against llama.cpp (oracle) for 100 random blocks extracted from the real GGUF file.
   - This can be a developer-only tool (`tools/dump_qblock.c`) plus a python script to diff.
 
 **Pass criteria:**
-- Quant matvec matches oracle within max abs error < 1e-3 for Q4_K and < 1e-5 for Q8_0.
+- [x] Quant matvec matches oracle within max abs error < 1e-3 for Q4_K and < 1e-5 for Q8_0.
 
 ### Task B3: Engine integration for quant decode
+Status: ✅ **DONE** *(2026-04-19)*
+
 The engine must route linear layers through a helper that chooses:
-- If `T==1` and weight is Q4_K → `matvec_q4k_f32`
-- If `T==1` and weight is Q8_0 → `matvec_q8_0_f32`
-- Else (prefill) either:
-  - (MVP) run a loop of matvec across T rows (slower but correct), OR
-  - (stretch) implement a quantized GEMM.
+- [x] If `T==1` and weight is Q4_K → `matvec_q4k_f32`
+- [x] If `T==1` and weight is Q8_0 → `matvec_q8_0_f32`
+- [x] Else (prefill) either: (MVP) run a loop of matvec across T rows (slower but correct).
 
 Also required for end-to-end correctness on the selected model variants:
-- `embedding_lookup()` must handle `DTYPE_Q8_0` embeddings (Q4_K_L) by dequantizing the chosen row into the FP32 hidden buffer.
-- Final logits projection (`lm_head`) must dispatch to quant matvec when it is `DTYPE_Q8_0` / `DTYPE_Q4_K` (at least for `T==1`).
+- [x] `embedding_lookup()` must handle `DTYPE_Q8_0` embeddings (Q4_K_L) by dequantizing the chosen row into the FP32 hidden buffer.
+- [x] Final logits projection (`lm_head`) must dispatch to quant matvec when it is `DTYPE_Q8_0` / `DTYPE_Q4_K` (at least for `T==1`).
 
 **MUST requirement:** correctness over speed; prefill can be slower.
 
-**Status (current repo):** the engine already routes linear ops through a single helper (`linear_dispatch()`), but it is FP32-only and fails fast on quant weights. Phase B will extend it to call `KernelVTable.matvec_q4k_f32` / `matvec_q8_0_f32`.
+**Status (current repo):** the engine already routes linear ops through a single helper (`linear_dispatch()`), but it is FP32-only and fails fast on quant weights. Phase B extended it to call `KernelVTable.matvec_q4k_f32` / `matvec_q8_0_f32`.
 
 ### Task B4: Model support checklist (Llama-3.1-8B)
-- Confirm loader maps these required tensor names:
+Status: ✅ **DONE** *(2026-04-19)*
+
+- [x] Confirm loader maps these required tensor names:
   - `token_embd.weight`, `output.weight`, all `blk.*` tensors.
-- Ensure tensors may have mixed types:
+- [x] Ensure tensors may have mixed types:
   - Q4_K for most linear weights
   - Q8_0 for embedding/lm_head in Q4_K_L variant
 
 **Warning:** memory sizing
 - CPU KV cache in FP32 can be extremely large at Llama-3 sizes. If RAM becomes a blocker, we keep KV as FP16 as a follow-up; not in scope unless required.
+
+### Task B5: Global Repository Patches (Integration Fixes)
+Status: ✅ **DONE** *(2026-04-19)*
+
+- [x] **Makefile (Linker issues)**: Added `src/engine/chat.c` into the Makefile's `REAL_ENGINE` variable. Before this, running `make && ./build/llmrt` threw a linkage "undefined reference to `chat_repl`" error because Person D's tool was absent from the build graph.
+- [x] **Makefile (Compiler issues)**: Added `-D_GNU_SOURCE` into `CFLAGS` to resolve standard Linux environment definitions. The C-11 strict mode broke macOS/Linux compatibility for definitions like `MAP_ANON` under `src/memory/arena.c`—that macro fixes compilation locally.
+- [x] **Macro Engineering (`extract_f16_to_f32`)**: The native compiler math environments lacked robust FP16 -> FP32 casting functions without an extensive standard. I ended up creating a custom manual inline standard bitcast parser `extract_f16_to_f32` across the quant files to translate hardware `0x3c00` bytes accurately into native 32-bit `float` ranges to keep execution exact.
 
 ---
 

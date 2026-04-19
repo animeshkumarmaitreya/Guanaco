@@ -13,7 +13,7 @@
 #============================================================================
 
 CC       = gcc
-CFLAGS   = -Wall -Wextra -Wpedantic -std=c11 -O2 -Isrc/include -mavx2 -mfma
+CFLAGS   = -Wall -Wextra -Wpedantic -std=c11 -D_GNU_SOURCE -O2 -Isrc/include -mavx2 -mfma
 LDFLAGS  = -lm
 DEBUG_FLAGS = -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 BUILD    = build
@@ -38,7 +38,7 @@ STUB_TOKENIZER = src/stubs/stub_tokenizer.c
 STUB_ENGINE    = src/stubs/stub_engine.c
 
 # Real implementations
-REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c
+REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c src/engine/chat.c
 REAL_KERNELS   = src/kernels/cpu/kernels_cpu.c
 REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
 REAL_TOKENIZER = src/tokenizer/tokenizer.c

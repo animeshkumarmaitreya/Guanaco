@@ -295,15 +295,16 @@ Build system note: the Makefile must add `-pthread` to compile/link when the thr
 ---
 
 ## 5) Quantization (MUST) — Phase B
+Status: ✅ **DONE** *(2026-04-19)*
 
 ### 5.1 What “Phase B” means here
-- Keep GGUF weights quantized in mmap’d file.
-- Implement decode hot path matvec for Q4_K and Q8_0.
-- Avoid allocating full FP32 copies of weight matrices.
+- [x] Keep GGUF weights quantized in mmap’d file.
+- [x] Implement decode hot path matvec for Q4_K and Q8_0.
+- [x] Avoid allocating full FP32 copies of weight matrices.
 
 ### 5.2 Loader changes (required)
-- Extend dtype mapping for GGML_TYPE_Q4_K and GGML_TYPE_Q8_0.
-- Track exact tensor byte size so quant kernels can validate bounds.
+- [x] Extend dtype mapping for GGML_TYPE_Q4_K and GGML_TYPE_Q8_0.
+- [x] Track exact tensor byte size so quant kernels can validate bounds.
 
 Hard requirement: any quant tensor must carry an authoritative `byte_size` (from GGUF metadata / row-size calculation). A “dtype size” helper cannot be used for quant types.
 
@@ -335,17 +336,17 @@ static void linear(const Tensor* X, const Tensor* W, Tensor* Y,
 - Do not assume “quantization only affects Wq/Wk/Wv/Wo and MLP”; embeddings and output weights can also be quantized in the selected target models.
 
 ### 5.4 Q8_0 format (implementation notes)
-- Block size: 32 logical elements.
-- Block bytes: 34 (as already encoded in loader): `2 bytes scale (f16) + 32 bytes q`.
-- Dequant: `f = scale * q[i]`.
+- [x] Block size: 32 logical elements.
+- [x] Block bytes: 34 (as already encoded in loader): `2 bytes scale (f16) + 32 bytes q`.
+- [x] Dequant: `f = scale * q[i]`.
 
 ### 5.5 Q4_K format (implementation notes)
 
 This section is intentionally concrete because Q4_K is the critical MUST path for the target model.
 
 **Block geometry**
-- Super-block size: 256 weights.
-- Storage bytes per super-block: 144 bytes.
+- [x] Super-block size: 256 weights.
+- [x] Storage bytes per super-block: 144 bytes.
   - `d` (fp16): base scale
   - `dmin` (fp16): base min-scale
   - `scales` (12 bytes): packed 6-bit `scale` and 6-bit `min` parameters for 8 sub-blocks of 32
@@ -413,10 +414,17 @@ Add two levels of correctness defense:
 2) Unit test a full 144-byte super-block dequant (256 floats) against a committed expected-floats fixture derived from a known-good implementation (llama.cpp). This is a one-time “golden vector” that makes regressions obvious.
 
 ### 5.6 Correctness + acceptance criteria
-- `--temperature 0` greedy output matches llama.cpp’s greedy output for the same GGUF for at least the first 8 tokens on 2 prompts.
-- No NaNs.
+- [x] `--temperature 0` greedy output matches llama.cpp’s greedy output for the same GGUF for at least the first 8 tokens on 2 prompts.
+- [x] No NaNs.
 
 **Note:** Exact logit match is not required between different implementations; token IDs must match.
+
+### 5.7 Global Repository Patches (Integration Fixes)
+Status: ✅ **DONE** *(2026-04-19)*
+
+- [x] **Makefile (Linker issues)**: Added `src/engine/chat.c` into the Makefile's `REAL_ENGINE` variable. Before this, running `make && ./build/llmrt` threw a linkage "undefined reference to `chat_repl`" error because Person D's tool was absent from the build graph.
+- [x] **Makefile (Compiler issues)**: Added `-D_GNU_SOURCE` into `CFLAGS` to resolve standard Linux environment definitions. The C-11 strict mode broke macOS/Linux compatibility for definitions like `MAP_ANON` under `src/memory/arena.c`—that macro fixes compilation locally.
+- [x] **Macro Engineering (`extract_f16_to_f32`)**: The native compiler math environments lacked robust FP16 -> FP32 casting functions without an extensive standard. I ended up creating a custom manual inline standard bitcast parser `extract_f16_to_f32` across the quant files to translate hardware `0x3c00` bytes accurately into native 32-bit `float` ranges to keep execution exact.
 
 ---
 
@@ -552,11 +560,12 @@ Backend selection:
 - Add runtime tests that exercise `--device auto|cpu|cuda` end-to-end once backend wiring lands (including “cuda requested but unavailable” behavior).
 
 Quant Phase B correctness:
-- Replace `tests/test_quant.c` stub with real tests:
-  - Q8_0 block dequant golden test
-  - Q4_K `scales/min` unpack helper golden test
-  - Q4_K full 144-byte super-block dequant golden test
-  - matvec sanity tests (small synthetic matrices) + bounds checks using `Tensor.byte_size`
+Status: ✅ **DONE** *(2026-04-19)*
+- [x] Replace `tests/test_quant.c` stub with real tests:
+  - [x] Q8_0 block dequant golden test
+  - [x] Q4_K `scales/min` unpack helper golden test
+  - [x] Q4_K full 144-byte super-block dequant golden test
+  - [x] matvec sanity tests (small synthetic matrices) + bounds checks using `Tensor.byte_size`
 
 E2E smoke:
 - Replace `tests/test_e2e_smoke.c` stub with a TinyLlama “greedy next token id” assertion test (dev-provided GGUF path or small checked-in fixture if feasible).
