@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define PASS(name) printf("  PASS: %s\n", name)
 #define FAIL(name, msg) do { printf("  FAIL: %s — %s\n", name, msg); failures++; } while(0)
@@ -110,10 +111,125 @@ static void test_backend_cuda_guard(void) {
 #endif
 }
 
+static void test_backend_threads_gemm_matches_single_thread(void) {
+    /* This validates correctness (not speed): multi-threaded GEMM must match single-thread GEMM. */
+    const int M = 3;
+    const int K = 128;
+    const int N = 96;
+
+    float* a = (float*)calloc((size_t)M * K, sizeof(float));
+    float* b = (float*)calloc((size_t)N * K, sizeof(float));
+    float* c1 = (float*)calloc((size_t)M * N, sizeof(float));
+    float* c4 = (float*)calloc((size_t)M * N, sizeof(float));
+    if (!a || !b || !c1 || !c4) {
+        FAIL("backend_threads_gemm_matches_single_thread", "allocation failed");
+        free(a); free(b); free(c1); free(c4);
+        return;
+    }
+
+    srand(123);
+    for (int i = 0; i < M * K; i++) a[i] = (float)(rand() % 200 - 100) / 100.0f;
+    for (int i = 0; i < N * K; i++) b[i] = (float)(rand() % 200 - 100) / 100.0f;
+
+    Tensor A = make_tensor(a, M, K);
+    Tensor B = make_tensor(b, N, K);
+    Tensor C1 = make_tensor(c1, M, N);
+    Tensor C4 = make_tensor(c4, M, N);
+
+    BackendConfig cfg1 = {0};
+    cfg1.kind = BACKEND_CPU;
+    cfg1.threads = 1;
+    cfg1.device_id = 0;
+
+    Backend* b1 = backend_create(&cfg1);
+    if (!b1) {
+        FAIL("backend_threads_gemm_matches_single_thread", "backend_create threads=1 returned NULL");
+        free(a); free(b); free(c1); free(c4);
+        return;
+    }
+    const KernelVTable* k1 = backend_kernels(b1);
+    if (!k1 || !k1->gemm_f32 || !k1->gemm_f32_nn) {
+        FAIL("backend_threads_gemm_matches_single_thread", "missing gemm vtable entries");
+        backend_destroy(b1);
+        free(a); free(b); free(c1); free(c4);
+        return;
+    }
+
+    memset(c1, 0, (size_t)M * N * sizeof(float));
+    k1->gemm_f32(&A, &B, &C1);
+
+    /* gemm_f32_nn path uses B(K,N) layout; build one from b (currently N,K). */
+    float* b_kn = (float*)calloc((size_t)K * N, sizeof(float));
+    float* c1_nn = (float*)calloc((size_t)M * N, sizeof(float));
+    float* c4_nn = (float*)calloc((size_t)M * N, sizeof(float));
+    if (!b_kn || !c1_nn || !c4_nn) {
+        FAIL("backend_threads_gemm_matches_single_thread", "allocation failed (nn)");
+        backend_destroy(b1);
+        free(a); free(b); free(c1); free(c4);
+        free(b_kn); free(c1_nn); free(c4_nn);
+        return;
+    }
+
+    for (int n = 0; n < N; n++) {
+        for (int k = 0; k < K; k++) {
+            b_kn[(size_t)k * N + n] = b[(size_t)n * K + k];
+        }
+    }
+    Tensor Bnn = make_tensor(b_kn, K, N);
+    Tensor C1nn = make_tensor(c1_nn, M, N);
+    Tensor C4nn = make_tensor(c4_nn, M, N);
+
+    memset(c1_nn, 0, (size_t)M * N * sizeof(float));
+    k1->gemm_f32_nn(&A, &Bnn, &C1nn);
+    backend_destroy(b1);
+
+    BackendConfig cfg4 = {0};
+    cfg4.kind = BACKEND_CPU;
+    cfg4.threads = 4;
+    cfg4.device_id = 0;
+
+    Backend* b4 = backend_create(&cfg4);
+    if (!b4) {
+        FAIL("backend_threads_gemm_matches_single_thread", "backend_create threads=4 returned NULL");
+        free(a); free(b); free(c1); free(c4);
+        free(b_kn); free(c1_nn); free(c4_nn);
+        return;
+    }
+    const KernelVTable* k4 = backend_kernels(b4);
+
+    memset(c4, 0, (size_t)M * N * sizeof(float));
+    k4->gemm_f32(&A, &B, &C4);
+
+    memset(c4_nn, 0, (size_t)M * N * sizeof(float));
+    k4->gemm_f32_nn(&A, &Bnn, &C4nn);
+
+    float max_err = 0.0f;
+    for (int i = 0; i < M * N; i++) {
+        float err = fabsf(c1[i] - c4[i]);
+        if (err > max_err) max_err = err;
+    }
+    float max_err_nn = 0.0f;
+    for (int i = 0; i < M * N; i++) {
+        float err = fabsf(c1_nn[i] - c4_nn[i]);
+        if (err > max_err_nn) max_err_nn = err;
+    }
+
+    if (max_err > 1e-5f || max_err_nn > 1e-5f) {
+        FAIL("backend_threads_gemm_matches_single_thread", "output mismatch between threads=1 and threads=4");
+    } else {
+        PASS("backend_threads_gemm_matches_single_thread");
+    }
+
+    backend_destroy(b4);
+    free(a); free(b); free(c1); free(c4);
+    free(b_kn); free(c1_nn); free(c4_nn);
+}
+
 int main(void) {
     printf("=== Backend Test Suite (scaffolding) ===\n");
 
     test_backend_cpu_gemm_vtable();
+    test_backend_threads_gemm_matches_single_thread();
     test_backend_cuda_guard();
 
     printf("\n");

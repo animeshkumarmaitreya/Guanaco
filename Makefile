@@ -66,11 +66,11 @@ $(BUILD):
 # ---- Main binary ----
 # Note: backend_cpu_create wires quant matvec hooks into the vtable,
 # so we must link those objects as well even if the engine doesn't call them yet.
-$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
+$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_THREADPOOL) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Test binaries ----
-$(BUILD)/test_kernels: tests/test_kernels.c $(REAL_KERNELS) | $(BUILD)
+$(BUILD)/test_kernels: tests/test_kernels.c $(REAL_KERNELS) $(REAL_THREADPOOL) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
@@ -79,7 +79,7 @@ $(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
 $(BUILD)/test_tokenizer: tests/test_tokenizer.c $(REAL_TOKENIZER) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
+$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) | $(BUILD)
@@ -88,7 +88,7 @@ $(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) | $(BUILD)
 $(BUILD)/test_e2e_smoke: tests/test_e2e_smoke.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_QUANT) | $(BUILD)
+$(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_threadpool: tests/test_threadpool.c $(REAL_THREADPOOL) | $(BUILD)

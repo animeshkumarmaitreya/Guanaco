@@ -1,5 +1,6 @@
 #include "kernels.h"
 #include "kernels_ext.h"
+#include "threadpool.h"
 #include <immintrin.h>
 #include <assert.h>
 #include <math.h>
@@ -15,6 +16,100 @@
  * - CUDA-specific code will live under `src/kernels/cuda/`.
  * - The backend abstraction selects which implementation to call.
  */
+
+static ThreadPool* g_threadpool = NULL;
+
+void kernels_cpu_set_threadpool(ThreadPool* tp) {
+    g_threadpool = tp;
+}
+
+typedef struct {
+    const float* a;
+    const float* b;
+    float* c;
+    int M;
+    int N;
+    int K;
+} GemmF32ColsCtx;
+
+static void gemm_f32_cols(int start, int end, void* vctx) {
+    GemmF32ColsCtx* ctx = (GemmF32ColsCtx*)vctx;
+    const int M = ctx->M;
+    const int N = ctx->N;
+    const int K = ctx->K;
+    const float* a_data = ctx->a;
+    const float* b_data = ctx->b;
+    float* c_data = ctx->c;
+
+    for (int i = 0; i < M; i++) {
+        const float* a_row = &a_data[(size_t)i * K];
+        float* c_row = &c_data[(size_t)i * N];
+
+        for (int j = start; j < end; j++) {
+            const float* b_row = &b_data[(size_t)j * K];
+            float sum = 0.0f;
+            int k = 0;
+
+            __m256 sum_vec = _mm256_setzero_ps();
+            for (; k <= K - 8; k += 8) {
+                __m256 a_vec = _mm256_loadu_ps(&a_row[k]);
+                __m256 b_vec = _mm256_loadu_ps(&b_row[k]);
+                sum_vec = _mm256_fmadd_ps(a_vec, b_vec, sum_vec);
+            }
+
+            float temp[8];
+            _mm256_storeu_ps(temp, sum_vec);
+            sum += temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5] + temp[6] + temp[7];
+
+            for (; k < K; k++) {
+                sum += a_row[k] * b_row[k];
+            }
+
+            c_row[j] = sum;
+        }
+    }
+}
+
+typedef struct {
+    const float* a;
+    const float* b;
+    float* c;
+    int M;
+    int N;
+    int K;
+} GemmF32NNColsCtx;
+
+static void gemm_f32_nn_cols(int start, int end, void* vctx) {
+    GemmF32NNColsCtx* ctx = (GemmF32NNColsCtx*)vctx;
+    const int M = ctx->M;
+    const int N = ctx->N;
+    const int K = ctx->K;
+    const float* a = ctx->a;
+    const float* b = ctx->b;
+    float* c = ctx->c;
+
+    for (int i = 0; i < M; i++) {
+        const float* a_row = a + (size_t)i * K;
+        float* c_row = c + (size_t)i * N;
+
+        int j = start;
+        for (; j <= end - 8; j += 8) {
+            __m256 acc = _mm256_setzero_ps();
+            for (int k = 0; k < K; k++) {
+                const __m256 b_vec = _mm256_loadu_ps(&b[(size_t)k * N + j]);
+                const __m256 a_broadcast = _mm256_set1_ps(a_row[k]);
+                acc = _mm256_fmadd_ps(a_broadcast, b_vec, acc);
+            }
+            _mm256_storeu_ps(&c_row[j], acc);
+        }
+
+        for (; j < end; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; k++) sum += a_row[k] * b[(size_t)k * N + j];
+            c_row[j] = sum;
+        }
+    }
+}
 
 void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C) {
 #ifndef NDEBUG
@@ -48,33 +143,15 @@ void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C) {
     const float* b_data = (const float*)B->data;
     float* c_data = (float*)C->data;
 
-    /* C(i, j) = dot(A[i, :], B[j, :]) */
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            float sum = 0.0f;
-            int k = 0;
-
-            /* AVX2 vectorized dot product */
-            __m256 sum_vec = _mm256_setzero_ps();
-            for (; k <= K - 8; k += 8) {
-                __m256 a_vec = _mm256_loadu_ps(&a_data[(size_t)i * K + k]);
-                __m256 b_vec = _mm256_loadu_ps(&b_data[(size_t)j * K + k]);
-                sum_vec = _mm256_fmadd_ps(a_vec, b_vec, sum_vec);
-            }
-
-            /* Horizontal sum of the AVX2 accumulator */
-            float temp[8];
-            _mm256_storeu_ps(temp, sum_vec);
-            sum += temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5] + temp[6] + temp[7];
-
-            /* Remainder loop */
-            for (; k < K; k++) {
-                sum += a_data[(size_t)i * K + k] * b_data[(size_t)j * K + k];
-            }
-
-            c_data[(size_t)i * N + j] = sum;
-        }
+    const int threads = threadpool_num_threads(g_threadpool);
+    if (threads <= 1 || N < 32) {
+        GemmF32ColsCtx ctx = {a_data, b_data, c_data, M, N, K};
+        gemm_f32_cols(0, N, &ctx);
+        return;
     }
+
+    GemmF32ColsCtx ctx = {a_data, b_data, c_data, M, N, K};
+    threadpool_parallel_for(g_threadpool, 0, N, 32, gemm_f32_cols, &ctx);
 }
 
 void gemm_f32_nn(const Tensor* A, const Tensor* B, Tensor* C) {
@@ -108,29 +185,15 @@ void gemm_f32_nn(const Tensor* A, const Tensor* B, Tensor* C) {
     const float* b = (const float*)B->data;
     float* c = (float*)C->data;
 
-    /* Vectorize across N (columns). */
-    for (int i = 0; i < M; i++) {
-        const float* a_row = a + (size_t)i * K;
-        float* c_row = c + (size_t)i * N;
-
-        int j = 0;
-        for (; j <= N - 8; j += 8) {
-            __m256 acc = _mm256_setzero_ps();
-            for (int k = 0; k < K; k++) {
-                const __m256 b_vec = _mm256_loadu_ps(&b[(size_t)k * N + j]);
-                const __m256 a_broadcast = _mm256_set1_ps(a_row[k]);
-                acc = _mm256_fmadd_ps(a_broadcast, b_vec, acc);
-            }
-            _mm256_storeu_ps(&c_row[j], acc);
-        }
-
-        /* Remainder columns */
-        for (; j < N; j++) {
-            float sum = 0.0f;
-            for (int k = 0; k < K; k++) sum += a_row[k] * b[(size_t)k * N + j];
-            c_row[j] = sum;
-        }
+    const int threads = threadpool_num_threads(g_threadpool);
+    if (threads <= 1 || N < 32) {
+        GemmF32NNColsCtx ctx = {a, b, c, M, N, K};
+        gemm_f32_nn_cols(0, N, &ctx);
+        return;
     }
+
+    GemmF32NNColsCtx ctx = {a, b, c, M, N, K};
+    threadpool_parallel_for(g_threadpool, 0, N, 32, gemm_f32_nn_cols, &ctx);
 }
 
 void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float eps) {

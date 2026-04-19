@@ -27,7 +27,7 @@ It is written to be directly actionable in this repo’s current structure (C11,
 
 4. **Context-based chat (MUST)**
 
-7. **CPU threads (MUST)**
+7. **CPU threads (MUST)** *(DONE 2026-04-19)*
 
 9. **Verification / validation infra (MUST, lightweight)**
 
@@ -89,6 +89,7 @@ Each person owns a coherent subsystem and ships tests from Day 1. Person D also 
   - `BACKEND_AUTO` support added to the backend layer.
   - Makefile/test link sets updated to include backend objects and any vtable-referenced objects.
 - **CPU attention-as-GEMM (DONE 2026-04-19):** refactored attention to compute scores/context via `gemm_f32()` + `gemm_f32_nn()` through the backend vtable; added an efficient contiguous `gemm_f32_nn()` implementation.
+- **CPU multithreading (DONE 2026-04-19):** implemented a tiny pthread threadpool behind `USE_PTHREAD=1` and used it to parallelize CPU GEMM kernels (via `BackendConfig.threads` / CLI `--threads`). Validation: `make test` still passes with `USE_PTHREAD=0`, and `make USE_PTHREAD=1 test` adds a worker-thread participation check plus a backend-level “threads=1 vs threads=4 outputs match” GEMM invariant.
 
 ### 0.1) Agree on new/updated headers
 We will add one new header and minimally extend existing ones.

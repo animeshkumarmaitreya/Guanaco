@@ -274,8 +274,14 @@ In debug builds:
 
 ## 4) CPU Threads (MUST)
 
+Status: ✅ **DONE** *(2026-04-19)*
+
 ### 4.1 CLI
 Add `--threads N`.
+
+**Build/runtime contract (current repo):**
+- Threading is enabled only when building with `USE_PTHREAD=1` (Makefile adds `-pthread` and the runtime uses a pthread-backed threadpool).
+- In CPU builds with `USE_PTHREAD=0`, the threadpool remains a correct serial fallback and `--threads` does not change execution.
 
 ### 4.2 Threadpool design
 - Implement a tiny pthread threadpool:
@@ -290,9 +296,18 @@ Build system note: the Makefile must add `-pthread` to compile/link when the thr
 2. Optional: per-layer MLP elementwise ops (minor)
 3. Optional: attention heads (only after scratch hazards are solved)
 
+**Implementation note (DONE 2026-04-19):**
+- Parallelizes CPU `gemm_f32()` and `gemm_f32_nn()` by splitting output columns into disjoint ranges (safe concurrent writes).
+- The threadpool is owned by the CPU backend and configured from `BackendConfig.threads` (set by CLI `--threads`).
+- No changes to the backend vtable API were required; CUDA backend creation/selection is unaffected.
+
 ### 4.4 Safety
 - Scratch allocator is single-threaded.
 - Only parallelize loops that write to disjoint output regions.
+
+**Validation (added):**
+- `tests/test_threadpool.c` includes a `USE_PTHREAD=1` worker-thread participation check.
+- `tests/test_backend.c` asserts GEMM outputs match between `threads=1` and `threads=4` to prevent numerical/regression bugs.
 
 ---
 
