@@ -22,7 +22,7 @@ BUILD    = build
 USE_CUDA ?= 0
 USE_PTHREAD ?= 0
 
-CUDA_SRCS = src/kernels/cuda/matvec_q4k_cuda.cu
+CUDA_SRCS = src/kernels/cuda/matvec_q4k_cuda.cu src/kernels/cuda/cuda_layer_kernels.cu
 CUDA_OBJS = $(patsubst %.cu, $(BUILD)/%.o, $(CUDA_SRCS))
 
 ifeq ($(USE_CUDA),1)

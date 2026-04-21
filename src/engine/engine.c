@@ -299,6 +299,40 @@ void transformer_layer(Tensor *hidden, LayerWeights *weights, KVCache *kv,
   assert(n_heads % n_kv_heads == 0);
   int heads_per_kv = n_heads / n_kv_heads; /* for GQA */
 
+#ifdef USE_CUDA
+  /* GPU fast path: if this layer's weights are on GPU and T=1 (decode),
+   * use the fused CUDA layer which keeps activations in VRAM. */
+  if (T == 1 && weights->wq && weights->wq->device_residency == 1) {
+    extern int cuda_transformer_layer_gpu(
+        const void*, int, int, const void*, int, int, const void*, int, int,
+        const void*, int, int, const void*, int, int, const void*, int, int,
+        const void*, int, int, const float*, const float*, float*,
+        float*, float*, int, int, int, int, int, int, int, int, int);
+    extern float* kv_cache_raw_k(KVCache* kv, int layer);
+    extern float* kv_cache_raw_v(KVCache* kv, int layer);
+    extern int kv_cache_head_stride(KVCache* kv);
+
+    float* h_k = kv_cache_raw_k(kv, layer);
+    float* h_v = kv_cache_raw_v(kv, layer);
+    int head_stride = kv_cache_head_stride(kv);
+
+    cuda_transformer_layer_gpu(
+        weights->wq->data, weights->wq->shape[0], weights->wq->shape[1],
+        weights->wk->data, weights->wk->shape[0], weights->wk->shape[1],
+        weights->wv->data, weights->wv->shape[0], weights->wv->shape[1],
+        weights->wo->data, weights->wo->shape[0], weights->wo->shape[1],
+        weights->w_gate->data, weights->w_gate->shape[0], weights->w_gate->shape[1],
+        weights->w_up->data, weights->w_up->shape[0], weights->w_up->shape[1],
+        weights->w_down->data, weights->w_down->shape[0], weights->w_down->shape[1],
+        (const float*)weights->rms_att->data, (const float*)weights->rms_ffn->data,
+        (float*)hidden->data,
+        h_k, h_v, head_stride,
+        H, kv_dim, cfg->ff_dim, head_dim,
+        n_heads, n_kv_heads, pos, kv_cache_head_stride(kv) / head_dim /* max_seq */);
+    return;
+  }
+#endif
+
   /* ---- Step 1: Save residual ---- */
   Tensor *residual = scratch_tensor(scr, 2, T, H, 0, 0);
   memcpy(residual->data, hidden->data, T * H * sizeof(float));

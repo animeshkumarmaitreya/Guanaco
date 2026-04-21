@@ -179,3 +179,22 @@ void kv_cache_destroy(KVCache* kv) {
      * This function exists for API completeness; the arena_destroy()
      * call at session end releases everything. */
 }
+
+/* Raw pointer accessors for GPU fused layer (avoids Tensor view overhead) */
+float* kv_cache_raw_k(KVCache* kv, int layer) {
+    int n_kv = kv->cfg.n_kv_heads;
+    int d    = kv->cfg.head_dim;
+    int seq  = kv->max_seq;
+    return kv->k_data + (size_t)layer * n_kv * seq * d;
+}
+
+float* kv_cache_raw_v(KVCache* kv, int layer) {
+    int n_kv = kv->cfg.n_kv_heads;
+    int d    = kv->cfg.head_dim;
+    int seq  = kv->max_seq;
+    return kv->v_data + (size_t)layer * n_kv * seq * d;
+}
+
+int kv_cache_head_stride(KVCache* kv) {
+    return kv->max_seq * kv->cfg.head_dim;
+}
