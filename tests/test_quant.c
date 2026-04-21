@@ -241,6 +241,68 @@ static void test_q4_k_byte_size_bounds(void) {
   printf("  PASS: q4_k_byte_size_bounds\n");
 }
 
+#ifdef USE_CUDA
+extern int cuda_matvec_q4k_f32_impl(const void *W_data, const float *x, float *y, int num_rows, int num_cols);
+extern void* cuda_upload_weight(const void* host_ptr, size_t size);
+extern void cudaFree(void* devPtr);
+
+static void test_cuda_parity_q4k(void) {
+  Tensor W;
+  W.ndim = 2;
+  W.shape[0] = 32;
+  W.shape[1] = 1024;
+  W.dtype = DTYPE_Q4_K;
+
+  int num_blocks = 32 * (1024 / 256);
+  block_q4_k* blocks = (block_q4_k*)malloc(sizeof(block_q4_k) * num_blocks);
+  memset(blocks, 0, sizeof(block_q4_k) * num_blocks);
+  for (int i = 0; i < num_blocks; i++) {
+    blocks[i].d = FP16_ONE;
+    blocks[i].dmin = FP16_ONE;
+    for(int j=0; j<12; j++) blocks[i].scales[j] = (uint8_t)(j % 8);
+    for(int j=0; j<128; j++) blocks[i].qs[j] = (uint8_t)(j % 256);
+  }
+  W.data = blocks;
+  W.byte_size = sizeof(block_q4_k) * num_blocks;
+
+  float* x = (float*)malloc(sizeof(float) * 1024);
+  for (int i = 0; i < 1024; i++) x[i] = (float)i / 1024.0f;
+
+  float y_cpu[32] = {0};
+  float y_gpu[32] = {0};
+
+  // CPU
+  int ret_cpu = matvec_q4k_f32(&W, x, y_cpu);
+  assert(ret_cpu == 0);
+
+  // GPU
+  void* d_W = cuda_upload_weight(blocks, W.byte_size);
+  assert(d_W != NULL);
+  int ret_gpu = cuda_matvec_q4k_f32_impl(d_W, x, y_gpu, 32, 1024);
+  assert(ret_gpu == 0);
+
+  // Compare
+  float max_err = 0.0f;
+  for (int i = 0; i < 32; i++) {
+    float err = fabsf(y_cpu[i] - y_gpu[i]);
+    if (err > max_err) max_err = err;
+  }
+
+  // Release
+  // Not using exact cuda namespace here, but if cudaFree works:
+  // Wait, I can't guarantee `cudaFree` is accessible if I don't include cuda_runtime.h.
+  // We can leave it allocated for the test, or just skip free.
+  free(blocks);
+  free(x);
+
+  if (max_err > 1e-4f) {
+    printf("  FAIL: cuda_parity_q4k (max err %f)\n", max_err);
+    exit(1);
+  }
+  printf("  PASS: cuda_parity_q4k (max err %f)\n", max_err);
+}
+#endif
+
 int main(void) {
   printf("=== Quantization Test Suite ===\n");
   test_q8_0_matvec();
@@ -248,6 +310,9 @@ int main(void) {
   test_q4_k_matvec();
   test_q4_k_scales_and_nibbles_mapping();
   test_q4_k_byte_size_bounds();
+#ifdef USE_CUDA
+  test_cuda_parity_q4k();
+#endif
   printf("\nAll tests PASSED ✓\n");
   return 0;
 }

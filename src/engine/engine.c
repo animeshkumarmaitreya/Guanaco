@@ -131,6 +131,14 @@ static void linear_dispatch(const Tensor *X, const Tensor *W, Tensor *Y,
                 ret);
         abort();
       }
+    } else if (W->dtype == DTYPE_Q6_K) {
+      assert(k->matvec_q6k_f32 != NULL);
+      int ret = k->matvec_q6k_f32(W, x_t, y_t);
+      if (ret != 0) {
+        fprintf(stderr, "linear_dispatch: matvec_q6k_f32 failed (ret=%d)\n",
+                ret);
+        abort();
+      }
     } else {
       fprintf(stderr,
               "linear_dispatch: quant weights not supported yet (dtype=%d)\n",
@@ -147,7 +155,25 @@ typedef struct {
   uint16_t scale;
   int8_t quants[32];
 } block_q8_0_embd;
+
+typedef struct {
+  uint16_t d;
+  uint16_t dmin;
+  uint8_t scales[12];
+  uint8_t qs[128];
+} block_q4_k_embd;
 #pragma pack(pop)
+
+static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d,
+                                    uint8_t *m) {
+  if (j < 4) {
+    *d = q[j] & 63;
+    *m = q[j + 4] & 63;
+  } else {
+    *d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
+    *m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
+  }
+}
 
 static inline float extract_f16_to_f32(uint16_t h) {
   uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
@@ -202,6 +228,42 @@ static void embedding_lookup(const Tensor *embedding, int *token_ids,
         float scale = extract_f16_to_f32(row_blocks[b].scale);
         for (int i = 0; i < 32; i++) {
           out_row[b * 32 + i] = row_blocks[b].quants[i] * scale;
+        }
+      }
+    } else if (embedding->dtype == DTYPE_Q4_K) {
+      /* Dequantize Q4_K embedding row on the fly */
+      block_q4_k_embd *emb_data = (block_q4_k_embd *)embedding->data;
+      int num_blocks = H / 256;
+      float *out_row = out_data + t * H;
+      block_q4_k_embd *row_blocks = emb_data + tok * num_blocks;
+
+      for (int b = 0; b < num_blocks; b++) {
+        const float d_all = extract_f16_to_f32(row_blocks[b].d);
+        const float min_all = extract_f16_to_f32(row_blocks[b].dmin);
+        const uint8_t *q = row_blocks[b].qs;
+        int is = 0;
+        uint8_t sc, m;
+
+        float *px = out_row + b * 256;
+
+        for (int j = 0; j < 256; j += 64) {
+          get_scale_min_k4(is + 0, row_blocks[b].scales, &sc, &m);
+          const float d1 = d_all * sc;
+          const float m1 = min_all * m;
+
+          get_scale_min_k4(is + 1, row_blocks[b].scales, &sc, &m);
+          const float d2 = d_all * sc;
+          const float m2 = min_all * m;
+
+          for (int l = 0; l < 32; ++l) {
+            px[l] = d1 * (q[l] & 0xF) - m1;
+          }
+          for (int l = 0; l < 32; ++l) {
+            px[32 + l] = d2 * (q[l] >> 4) - m2;
+          }
+          q += 32;
+          px += 64;
+          is += 2;
         }
       }
     } else {

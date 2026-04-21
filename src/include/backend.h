@@ -34,6 +34,7 @@ typedef struct {
 
     /* Quantized decode hot path (Phase B) */
     int (*matvec_q4k_f32)(const Tensor* W_q4k, const float* x, float* y);
+    int (*matvec_q6k_f32)(const Tensor* W_q6k, const float* x, float* y);
     int (*matvec_q8_0_f32)(const Tensor* W_q8_0, const float* x, float* y);
 } KernelVTable;
 
@@ -41,6 +42,7 @@ typedef struct {
     BackendKind kind;
     int threads;   /* CPU threads (or host threads used by CUDA path) */
     int device_id; /* CUDA device id; ignored for CPU */
+    int n_gpu_layers; /* Dynamic layer ceiling for HW VRAM thresholds */
 } BackendConfig;
 
 Backend*           backend_create(const BackendConfig* cfg);

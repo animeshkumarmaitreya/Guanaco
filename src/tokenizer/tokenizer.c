@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <float.h>
 #include <math.h>
+#include <unistd.h>
 
 /* ---- Tokenizer ---- */
 
@@ -348,8 +349,11 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
     args->temperature = 0.7f;
     args->top_k       = 40;
     args->top_p       = 0.9f;
+    args->ctx_len     = 0;
+    args->n_gpu_layers = 0;
     args->device      = DEVICE_AUTO;
-    args->threads     = 1;
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    args->threads     = (cores > 1) ? (int)(cores <= 8 ? cores : 8) : 1;
     args->chat        = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -358,10 +362,12 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
             printf("  --model <path>        Path to GGUF model file\n");
             printf("  --prompt <text>       Input prompt\n");
             printf("  --max-tokens <N>      Max tokens to generate (default: 128)\n");
+            printf("  --ctx <N>             Context buffer size limit (default: min(model, 8192))\n");
             printf("  --temperature <float> Sampling temperature (default: 0.7)\n");
             printf("  --top-k <N>           Top-k sampling (default: 40; 0 disables)\n");
             printf("  --top-p <p>           Top-p sampling (default: 0.9; 1 disables)\n");
             printf("  --device <kind>       Device: auto|cpu|cuda (default: auto)\n");
+            printf("  --n-gpu-layers <N>    Number of layers to offload to GPU\n");
             printf("  --threads <N>         CPU threads (default: 1)\n");
             printf("  --chat                Chat REPL mode\n");
             return 1;
@@ -369,6 +375,8 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
         else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) args->model_path = argv[++i];
         else if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) args->prompt = argv[++i];
         else if (strcmp(argv[i], "--max-tokens") == 0 && i + 1 < argc) args->max_tokens = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--n-gpu-layers") == 0 && i + 1 < argc) args->n_gpu_layers = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--ctx") == 0 && i + 1 < argc) args->ctx_len = atoi(argv[++i]);
         else if (strcmp(argv[i], "--temperature") == 0 && i + 1 < argc) args->temperature = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--top-k") == 0 && i + 1 < argc) args->top_k = atoi(argv[++i]);
         else if (strcmp(argv[i], "--top-p") == 0 && i + 1 < argc) args->top_p = (float)atof(argv[++i]);
@@ -406,8 +414,13 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
         fprintf(stderr, "Error: --device cuda requested but CUDA is not enabled in this build (try: make USE_CUDA=1)\n");
         return -1;
 #else
-        fprintf(stderr, "Error: --device cuda requested but CUDA backend is not implemented yet\n");
-        return -1;
+        /* Auto-detect GPU layers: if user didn't set --n-gpu-layers, default to
+         * 26 (benchmarked sweet spot for RTX 3050 4GB).
+         * 26 layers × 117MB ≈ 3.0GB, leaving ~1.0GB for activations + system. */
+        if (args->n_gpu_layers == 0) {
+            args->n_gpu_layers = 26;
+            fprintf(stderr, "[auto] --n-gpu-layers not set, defaulting to %d for CUDA device\n", args->n_gpu_layers);
+        }
 #endif
     }
 

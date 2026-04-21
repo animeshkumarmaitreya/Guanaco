@@ -25,7 +25,8 @@ int chat_repl(const BackendConfig* backend_cfg,
               int max_tokens,
               float temperature,
               int top_k,
-              float top_p) {
+              float top_p,
+              int ctx_len) {
     
     if (!backend_cfg || !model_path) {
         fprintf(stderr, "Error: invalid arguments to chat_repl\n");
@@ -50,7 +51,7 @@ int chat_repl(const BackendConfig* backend_cfg,
     printf("Loading model: %s\n", model_path);
     double t0 = time_ms();
     
-    ModelWeights* model = load_model(model_path, NULL);
+    ModelWeights* model = load_model(model_path, cfg_local.n_gpu_layers, NULL);
     if (!model) {
         fprintf(stderr, "Failed to load model\n");
         backend_destroy(backend);
@@ -62,6 +63,14 @@ int chat_repl(const BackendConfig* backend_cfg,
 
     ModelConfig* cfg = &model->config;
     const int eos_token_id = (cfg->eos_token_id > 0) ? cfg->eos_token_id : 2;
+
+    /* Clamp context length to prevent OOM */
+    if (ctx_len <= 0) {
+        ctx_len = 8192;
+    }
+    if (cfg->max_seq_len > ctx_len) {
+        cfg->max_seq_len = ctx_len;
+    }
 
     /* ---- Create allocators ---- */
     size_t kv_size = 2UL * cfg->n_layers * cfg->n_kv_heads * cfg->max_seq_len

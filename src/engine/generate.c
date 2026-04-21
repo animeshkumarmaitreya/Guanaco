@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 /* ---------- Timing helpers ---------- */
 
@@ -39,7 +40,7 @@ static const char* backend_kind_str(BackendKind k) {
 /* ---------- Generate ---------- */
 
 void generate(const char* model_path, const char* prompt, int max_tokens,
-              float temperature, int top_k, float top_p,
+              float temperature, int top_k, float top_p, int ctx_len,
               const BackendConfig* backend_cfg) {
 
     BackendConfig cfg_local = {0};
@@ -88,17 +89,29 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     double t0 = time_ms();
 
     /* ---- Load model ---- */
-    ModelWeights* model = load_model(model_path, NULL);
+    ModelWeights* model = load_model(model_path, cfg_local.n_gpu_layers, NULL);
     if (!model) {
         fprintf(stderr, "Failed to load model\n");
         return;
     }
 
     double load_time = time_ms() - t0;
-    printf("Model loaded in %.1f ms\n", load_time);
+    printf("Model loaded in %.1f ms", load_time);
+    if (cfg_local.n_gpu_layers > 0) {
+        printf(" (%d/%d layers on GPU)", cfg_local.n_gpu_layers, model->config.n_layers);
+    }
+    printf("\n");
 
     ModelConfig* cfg = &model->config;
     const int eos_token_id = (cfg->eos_token_id > 0) ? cfg->eos_token_id : 2;
+
+    /* Clamp context length to prevent OOM */
+    if (ctx_len <= 0) {
+        ctx_len = 8192; /* Safe default */
+    }
+    if (cfg->max_seq_len > ctx_len) {
+        cfg->max_seq_len = ctx_len;
+    }
 
     /* ---- Create allocators ---- */
     /* Arena for KV cache — size calculation:
@@ -200,7 +213,27 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
             break;
         }
 
-        /* Forward pass for single token */
+        /* Thermal safety — sample every 10 tokens to avoid sysfs overhead */
+        if (i % 10 == 0) {
+            extern int cpu_get_temperature(void);
+            int cpu_t = cpu_get_temperature();
+            if (cpu_t >= 85) {
+                usleep(100000); /* 100ms CPU throttle */
+            } else if (cpu_t >= 80) {
+                usleep(20000);  /* 20ms gentle backoff */
+            }
+#ifdef USE_CUDA
+            if (cfg_local.kind == BACKEND_CUDA) {
+                extern int cuda_get_temperature(void);
+                int gpu_t = cuda_get_temperature();
+                if (gpu_t >= 82) {
+                    usleep(50000); /* 50ms GPU throttle */
+                } else if (gpu_t >= 78) {
+                    usleep(10000); /* 10ms gentle backoff */
+                }
+            }
+#endif
+        }
         logits = forward(model, kv, scr, &next_token, 1, pos, k);
         if (!logits) {
             fprintf(stderr, "\nForward pass failed at token %d\n", i);

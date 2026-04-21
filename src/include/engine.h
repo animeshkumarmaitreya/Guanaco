@@ -15,7 +15,7 @@
 /* Load a GGUF model file. Parses header, validates tensors, mmaps weights.
  * Uses `arena` for metadata allocations (or malloc if arena is NULL).
  * Returns NULL on failure. */
-ModelWeights* load_model(const char* path, Arena* arena);
+ModelWeights* load_model(const char* path, int n_gpu_layers, Arena* arena);
 
 /* Free model weights (unmap, close file, etc.) */
 void free_model(ModelWeights* model);
@@ -54,7 +54,7 @@ Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
  * top_k:       top-k sampling parameter (0 = disabled)
  * top_p:       top-p sampling parameter (1.0 = disabled) */
 void generate(const char* model_path, const char* prompt, int max_tokens,
-              float temperature, int top_k, float top_p,
+              float temperature, int top_k, float top_p, int ctx_len,
               const BackendConfig* backend_cfg);
 
 #endif /* LLMRT_ENGINE_H */

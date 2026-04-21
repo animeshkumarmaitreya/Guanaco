@@ -10,6 +10,35 @@
 /* Internal hook implemented by src/kernels/cpu/kernels_cpu.c */
 extern void kernels_cpu_set_threadpool(ThreadPool* tp);
 
+#include <dirent.h>
+#include <string.h>
+#include <stdio.h>
+
+int cpu_get_temperature(void) {
+    DIR *d = opendir("/sys/class/thermal/");
+    int max_temp = 0;
+    if (d) {
+        struct dirent *dir;
+        while ((dir = readdir(d)) != NULL) {
+            if (strncmp(dir->d_name, "thermal_zone", 12) == 0) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/class/thermal/%s/temp", dir->d_name);
+                FILE *f = fopen(path, "r");
+                if (f) {
+                    int t = 0;
+                    if (fscanf(f, "%d", &t) == 1) {
+                        t /= 1000;
+                        if (t > max_temp) max_temp = t;
+                    }
+                    fclose(f);
+                }
+            }
+        }
+        closedir(d);
+    }
+    return max_temp;
+}
+
 Backend* backend_cpu_create(const BackendConfig* cfg) {
     Backend* b = (Backend*)calloc(1, sizeof(Backend));
     if (!b) return NULL;
@@ -29,6 +58,7 @@ Backend* backend_cpu_create(const BackendConfig* cfg) {
 
     /* Quant decode hooks (Phase B) */
     b->kernels.matvec_q4k_f32 = matvec_q4k_f32;
+    b->kernels.matvec_q6k_f32 = matvec_q6k_f32;
     b->kernels.matvec_q8_0_f32 = matvec_q8_0_f32;
 
     /* CPU threading: create a threadpool and make it available to CPU kernels. */

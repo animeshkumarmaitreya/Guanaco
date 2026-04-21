@@ -19,6 +19,7 @@ typedef enum {
   DTYPE_Q8_0 = 2,
   DTYPE_Q4_0 = 3,
   DTYPE_Q4_K = 4,
+  DTYPE_Q6_K = 5,
   DTYPE_UNKNOWN = 99,
 } DataType;
 
@@ -35,6 +36,8 @@ static inline size_t dtype_size(DataType dt) {
   case DTYPE_Q4_0:
     return 1; /* approximate — real size is block-based */
   case DTYPE_Q4_K:
+    return 1; /* approximate — real size is block-based */
+  case DTYPE_Q6_K:
     return 1; /* approximate — real size is block-based */
   default:
     return 0;
@@ -54,6 +57,7 @@ typedef struct {
   uint32_t ggml_type; /* GGML type enum (for quant block decoding logic) */
   size_t byte_size;   /* authoritative size in bytes (esp. for quant); 0 if
                          unknown */
+  int device_residency; /* 0 = CPU, 1 = GPU */
 } Tensor;
 
 /* Whether the tensor is contiguous row-major (C-order) as described by

@@ -17,7 +17,7 @@
  * - The backend abstraction selects which implementation to call.
  */
 
-static ThreadPool* g_threadpool = NULL;
+ThreadPool* g_threadpool = NULL;
 
 void kernels_cpu_set_threadpool(ThreadPool* tp) {
     g_threadpool = tp;
@@ -227,13 +227,38 @@ void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float ep
         const float* x = in_data + (size_t)i * dim;
         float* out = out_data + (size_t)i * dim;
 
-        float ss = 0.0f;
-        for (int j = 0; j < dim; j++) ss += x[j] * x[j];
+        /* AVX2 sum-of-squares */
+        __m256 ss_vec = _mm256_setzero_ps();
+        int j = 0;
+        for (; j <= dim - 8; j += 8) {
+            __m256 xv = _mm256_loadu_ps(&x[j]);
+            ss_vec = _mm256_fmadd_ps(xv, xv, ss_vec);
+        }
+        float temp[8];
+        _mm256_storeu_ps(temp, ss_vec);
+        float ss = temp[0]+temp[1]+temp[2]+temp[3]+temp[4]+temp[5]+temp[6]+temp[7];
+        for (; j < dim; j++) ss += x[j] * x[j];
+
         ss /= dim;
         ss += eps;
-        ss = 1.0f / sqrtf(ss); /* 1 / rms */
+        ss = 1.0f / sqrtf(ss);
 
-        for (int j = 0; j < dim; j++) {
+        /* AVX2 scale + weight multiply */
+        __m256 scale = _mm256_set1_ps(ss);
+        j = 0;
+        if (w_data) {
+            for (; j <= dim - 8; j += 8) {
+                __m256 xv = _mm256_loadu_ps(&x[j]);
+                __m256 wv = _mm256_loadu_ps(&w_data[j]);
+                _mm256_storeu_ps(&out[j], _mm256_mul_ps(wv, _mm256_mul_ps(xv, scale)));
+            }
+        } else {
+            for (; j <= dim - 8; j += 8) {
+                __m256 xv = _mm256_loadu_ps(&x[j]);
+                _mm256_storeu_ps(&out[j], _mm256_mul_ps(xv, scale));
+            }
+        }
+        for (; j < dim; j++) {
             out[j] = (w_data ? w_data[j] : 1.0f) * (x[j] * ss);
         }
     }
@@ -289,7 +314,24 @@ void silu_inplace(Tensor* x) {
 #endif
     const int numel = tensor_numel(x);
     float* data = (float*)x->data;
-    for (int i = 0; i < numel; i++) {
+    int i = 0;
+    /* AVX2 SiLU: x * sigmoid(x) = x / (1 + exp(-x)) */
+    for (; i <= numel - 8; i += 8) {
+        __m256 xv = _mm256_loadu_ps(&data[i]);
+        __m256 neg_x = _mm256_sub_ps(_mm256_setzero_ps(), xv);
+        /* Fast exp(-x) approximation: use the identity exp(x) ~ (1+x/256)^256
+         * but for production, just use scalar expf per lane via extract/insert.
+         * AVX2 has no native exp, so we process 8 elements with scalar fallback. */
+        float tmp[8];
+        _mm256_storeu_ps(tmp, neg_x);
+        tmp[0] = 1.0f/(1.0f + expf(tmp[0])); tmp[1] = 1.0f/(1.0f + expf(tmp[1]));
+        tmp[2] = 1.0f/(1.0f + expf(tmp[2])); tmp[3] = 1.0f/(1.0f + expf(tmp[3]));
+        tmp[4] = 1.0f/(1.0f + expf(tmp[4])); tmp[5] = 1.0f/(1.0f + expf(tmp[5]));
+        tmp[6] = 1.0f/(1.0f + expf(tmp[6])); tmp[7] = 1.0f/(1.0f + expf(tmp[7]));
+        __m256 sig = _mm256_loadu_ps(tmp);
+        _mm256_storeu_ps(&data[i], _mm256_mul_ps(xv, sig));
+    }
+    for (; i < numel; i++) {
         data[i] = data[i] / (1.0f + expf(-data[i]));
     }
 }
@@ -307,7 +349,13 @@ void residual_add(Tensor* x, const Tensor* residual) {
     const int numel = tensor_numel(x);
     float* x_data = (float*)x->data;
     const float* res_data = (const float*)residual->data;
-    for (int i = 0; i < numel; i++) {
+    int i = 0;
+    for (; i <= numel - 8; i += 8) {
+        __m256 xv = _mm256_loadu_ps(&x_data[i]);
+        __m256 rv = _mm256_loadu_ps(&res_data[i]);
+        _mm256_storeu_ps(&x_data[i], _mm256_add_ps(xv, rv));
+    }
+    for (; i < numel; i++) {
         x_data[i] += res_data[i];
     }
 }
@@ -325,7 +373,13 @@ void elemwise_mul(Tensor* a, const Tensor* b) {
     const int numel = tensor_numel(a);
     float* a_data = (float*)a->data;
     const float* b_data = (const float*)b->data;
-    for (int i = 0; i < numel; i++) {
+    int i = 0;
+    for (; i <= numel - 8; i += 8) {
+        __m256 av = _mm256_loadu_ps(&a_data[i]);
+        __m256 bv = _mm256_loadu_ps(&b_data[i]);
+        _mm256_storeu_ps(&a_data[i], _mm256_mul_ps(av, bv));
+    }
+    for (; i < numel; i++) {
         a_data[i] *= b_data[i];
     }
 }

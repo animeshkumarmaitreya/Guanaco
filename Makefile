@@ -22,8 +22,12 @@ BUILD    = build
 USE_CUDA ?= 0
 USE_PTHREAD ?= 0
 
+CUDA_SRCS = src/kernels/cuda/matvec_q4k_cuda.cu
+CUDA_OBJS = $(patsubst %.cu, $(BUILD)/%.o, $(CUDA_SRCS))
+
 ifeq ($(USE_CUDA),1)
 	CFLAGS += -DUSE_CUDA=1
+	LDFLAGS += -L/usr/local/cuda/lib64 -lcudart -lnvidia-ml
 endif
 
 ifeq ($(USE_PTHREAD),1)
@@ -44,7 +48,7 @@ REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
 REAL_TOKENIZER = src/tokenizer/tokenizer.c
 
 # Quant stubs (Phase B scaffolding)
-REAL_QUANT     = src/kernels/cpu/quant_matvec_q8_0.c src/kernels/cpu/quant_matvec_q4_k.c
+REAL_QUANT     = src/kernels/cpu/quant_matvec_q8_0.c src/kernels/cpu/quant_matvec_q4_k.c src/kernels/cpu/quant_matvec_q6_k.c
 
 # Backend + threading scaffolding
 REAL_BACKEND   = src/backend/backend.c src/backend/cpu_backend.c src/backend/cuda_backend.c
@@ -63,11 +67,19 @@ all: $(BUILD)/llmrt
 $(BUILD):
 	mkdir -p $(BUILD)
 
+# ---- CUDA Kernels ----
+$(BUILD)/%.o: %.cu | $(BUILD)
+	@mkdir -p $(dir $@)
+	nvcc -O3 -arch=sm_86 -Isrc/include -c $< -o $@
+
 # ---- Main binary ----
-# Note: backend_cpu_create wires quant matvec hooks into the vtable,
-# so we must link those objects as well even if the engine doesn't call them yet.
+ifeq ($(USE_CUDA),1)
+$(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_THREADPOOL) $(REAL_QUANT) $(CUDA_OBJS) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+else
 $(BUILD)/llmrt: src/main.c $(KERNELS) $(MEMORY) $(TOKENIZER) $(ENGINE) $(REAL_BACKEND) $(REAL_THREADPOOL) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+endif
 
 # ---- Test binaries ----
 $(BUILD)/test_kernels: tests/test_kernels.c $(REAL_KERNELS) $(REAL_THREADPOOL) | $(BUILD)
@@ -82,8 +94,13 @@ $(BUILD)/test_tokenizer: tests/test_tokenizer.c $(REAL_TOKENIZER) | $(BUILD)
 $(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) | $(BUILD)
+ifeq ($(USE_CUDA),1)
+$(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) $(REAL_THREADPOOL) $(REAL_KERNELS) $(CUDA_OBJS) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+else
+$(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) $(REAL_THREADPOOL) $(REAL_KERNELS) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+endif
 
 $(BUILD)/test_e2e_smoke: tests/test_e2e_smoke.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

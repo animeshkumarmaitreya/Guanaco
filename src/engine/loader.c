@@ -149,6 +149,7 @@ static DataType ggml_to_dtype(int ggml_type) {
         case GGML_TYPE_Q8_0: return DTYPE_Q8_0;
         case GGML_TYPE_Q4_0: return DTYPE_Q4_0;
         case GGML_TYPE_Q4_K: return DTYPE_Q4_K;
+        case GGML_TYPE_Q6_K: return DTYPE_Q6_K;
         default:             return DTYPE_UNKNOWN;
     }
 }
@@ -263,7 +264,7 @@ typedef struct {
 
 static LoaderState* g_loader_state = NULL;  /* single model for now */
 
-ModelWeights* load_model(const char* path, Arena* arena) {
+ModelWeights* load_model(const char* path, int n_gpu_layers, Arena* arena) {
     /* ---- Open and mmap the entire file ---- */
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -582,7 +583,7 @@ ModelWeights* load_model(const char* path, Arena* arena) {
            (unsigned long)tensor_count, model->config.vocab_size);
 
     /* Validate that all layers have all required weights */
-    #define IS_VALID_WEIGHT(dt) ((dt) == DTYPE_F32 || (dt) == DTYPE_Q8_0 || (dt) == DTYPE_Q4_K)
+    #define IS_VALID_WEIGHT(dt) ((dt) == DTYPE_F32 || (dt) == DTYPE_Q8_0 || (dt) == DTYPE_Q4_K || (dt) == DTYPE_Q6_K)
 
     int valid = 1;
     for (int l = 0; l < cfg.n_layers; l++) {
@@ -640,7 +641,7 @@ ModelWeights* load_model(const char* path, Arena* arena) {
     }
 
     if (!valid) {
-        fprintf(stderr, "load_model: model contains unsupported tensor dtypes; supported: F32, Q8_0, Q4_K\n");
+        fprintf(stderr, "load_model: model contains unsupported tensor dtypes; supported: F32, Q8_0, Q4_K, Q6_K\n");
         goto fail_model;
     }
 
@@ -661,6 +662,58 @@ ModelWeights* load_model(const char* path, Arena* arena) {
         free(tensor_infos[i].name);
     }
     free(tensor_infos);
+
+    /* Assign device residency for Offloading */
+#ifdef USE_CUDA
+    extern void* cuda_upload_weight(const void* host_ptr, size_t size);
+#endif
+
+    for (int l = 0; l < cfg.n_layers; l++) {
+        int residency = (l < n_gpu_layers) ? 1 : 0;
+        LayerWeights* lw = &model->layers[l];
+        
+        /* Only set GPU residency for Q4_K tensors — that's the only quant type
+         * with a CUDA kernel. Q6_K/Q8_0/F32 weights stay on host. */
+        #define SET_GPU_IF_Q4K(tensor) do { \
+            if ((tensor) && (tensor)->dtype == DTYPE_Q4_K) (tensor)->device_residency = residency; \
+            else if (tensor) (tensor)->device_residency = 0; \
+        } while(0)
+
+        SET_GPU_IF_Q4K(lw->wq);
+        SET_GPU_IF_Q4K(lw->wk);
+        SET_GPU_IF_Q4K(lw->wv);
+        SET_GPU_IF_Q4K(lw->wo);
+        SET_GPU_IF_Q4K(lw->w_gate);
+        SET_GPU_IF_Q4K(lw->w_up);
+        SET_GPU_IF_Q4K(lw->w_down);
+        #undef SET_GPU_IF_Q4K
+        /* Norm weights are always F32 and always stay on CPU */
+        if (lw->rms_att) lw->rms_att->device_residency = 0;
+        if (lw->rms_ffn) lw->rms_ffn->device_residency = 0;
+        
+#ifdef USE_CUDA
+        if (residency == 1) {
+            void* d_ptr;
+            /* Upload only Q4_K weights that were marked GPU-resident */
+            #define UPLOAD_IF_GPU(tensor) do { \
+                if ((tensor) && (tensor)->device_residency == 1) { \
+                    d_ptr = cuda_upload_weight((tensor)->data, (tensor)->byte_size); \
+                    if (d_ptr) (tensor)->data = d_ptr; \
+                    else (tensor)->device_residency = 0; /* fallback to CPU */ \
+                } \
+            } while(0)
+            
+            UPLOAD_IF_GPU(lw->wq);
+            UPLOAD_IF_GPU(lw->wk);
+            UPLOAD_IF_GPU(lw->wv);
+            UPLOAD_IF_GPU(lw->wo);
+            UPLOAD_IF_GPU(lw->w_gate);
+            UPLOAD_IF_GPU(lw->w_up);
+            UPLOAD_IF_GPU(lw->w_down);
+            #undef UPLOAD_IF_GPU
+        }
+#endif
+    }
 
     return model;
 

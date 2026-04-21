@@ -63,6 +63,8 @@ typedef struct {
     float       temperature;
     int         top_k;
     float       top_p;
+    int         ctx_len;
+    int         n_gpu_layers;
 
     /* Pre-flight scaffolding: used by later backend/chat/thread work. */
     DeviceKind  device;

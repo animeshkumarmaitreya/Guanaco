@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
 
     BackendConfig backend_cfg = {0};
     backend_cfg.threads = args.threads;
+    backend_cfg.n_gpu_layers = args.n_gpu_layers;
     backend_cfg.device_id = 0;
 
     /* Backend selection is centralized in backend_create(); DEVICE_AUTO maps to BACKEND_AUTO. */
@@ -45,7 +46,7 @@ int main(int argc, char** argv) {
         /* Chat REPL: interactive multi-turn conversation */
         return chat_repl(&backend_cfg, args.model_path,
                          args.max_tokens, args.temperature,
-                         args.top_k, args.top_p);
+                         args.top_k, args.top_p, args.ctx_len);
     } else {
         /* Single-turn generation */
         printf("LLM Inference Runtime\n");
@@ -55,12 +56,13 @@ int main(int argc, char** argv) {
         printf("  Temperature: %.2f\n", args.temperature);
         printf("  Top-k:       %d\n", args.top_k);
         printf("  Top-p:       %.2f\n", args.top_p);
+        printf("  Ctx limit:   %d\n", args.ctx_len);
         printf("  Device:      %s\n", device_kind_str(args.device));
         printf("  Threads:     %d\n", args.threads);
         printf("---\n");
 
         generate(args.model_path, args.prompt, args.max_tokens,
-                 args.temperature, args.top_k, args.top_p,
+                 args.temperature, args.top_k, args.top_p, args.ctx_len,
                  &backend_cfg);
 
         return 0;

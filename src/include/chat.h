@@ -13,6 +13,7 @@ int chat_repl(const BackendConfig* backend_cfg,
               int max_tokens,
               float temperature,
               int top_k,
-              float top_p);
+              float top_p,
+              int ctx_len);
 
 #endif /* LLMRT_CHAT_H */

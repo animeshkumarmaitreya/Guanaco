@@ -74,6 +74,12 @@ KVCache* kv_cache_create(Arena* arena, ModelConfig* cfg, int max_seq_len) {
     memset(kv->k_data, 0, bytes);
     memset(kv->v_data, 0, bytes);
 
+#ifdef USE_CUDA
+    extern int cudaHostRegister(void *ptr, size_t size, unsigned int flags);
+    cudaHostRegister(kv->k_data, bytes, 0);
+    cudaHostRegister(kv->v_data, bytes, 0);
+#endif
+
     return kv;
 }
 
@@ -163,8 +169,13 @@ Tensor* kv_cache_get_v(KVCache* kv, int layer, int up_to_pos) {
 }
 
 void kv_cache_destroy(KVCache* kv) {
+    if (!kv) return;
+#ifdef USE_CUDA
+    extern int cudaHostUnregister(void *ptr);
+    if (kv->k_data) cudaHostUnregister(kv->k_data);
+    if (kv->v_data) cudaHostUnregister(kv->v_data);
+#endif
     /* Memory is arena-managed — nothing to free individually.
      * This function exists for API completeness; the arena_destroy()
      * call at session end releases everything. */
-    (void)kv;
 }
