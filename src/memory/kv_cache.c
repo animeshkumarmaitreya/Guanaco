@@ -134,6 +134,7 @@ Tensor* kv_cache_get_k(KVCache* kv, int layer, int up_to_pos) {
     int n_kv = kv->cfg.n_kv_heads;
     int d    = kv->cfg.head_dim;
     int seq  = kv->max_seq;
+    if (up_to_pos > seq) up_to_pos = seq;
 
     Tensor* view = &kv->k_views[layer];
     view->data      = kv->k_data + (size_t)layer * n_kv * seq * d;
@@ -156,6 +157,7 @@ Tensor* kv_cache_get_v(KVCache* kv, int layer, int up_to_pos) {
     int n_kv = kv->cfg.n_kv_heads;
     int d    = kv->cfg.head_dim;
     int seq  = kv->max_seq;
+    if (up_to_pos > seq) up_to_pos = seq;
 
     Tensor* view = &kv->v_views[layer];
     view->data      = kv->v_data + (size_t)layer * n_kv * seq * d;

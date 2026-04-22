@@ -231,11 +231,8 @@ int chat_repl(const BackendConfig* backend_cfg,
         for (int i = 1; i < max_tokens && tokens_generated < CHAT_MAX_OUTPUT_TOKENS; i++) {
             int pos = current_pos + i - 1;
 
-            /* Check sequence length limit */
-            if (pos >= cfg->max_seq_len - 1) {
-                printf("\n[max sequence length reached]\n");
-                break;
-            }
+            /* In ring-buffer mode, we don't break. */
+            int seq_len_for_attention = (pos + 1 > cfg->max_seq_len) ? cfg->max_seq_len : (pos + 1);
 
             /* Forward pass for single token */
             logits = forward(model, kv, scr, &next_token, 1, pos, k);

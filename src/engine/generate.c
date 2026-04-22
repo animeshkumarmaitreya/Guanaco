@@ -267,11 +267,9 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     for (int i = 1; i < max_tokens; i++) {
         int pos = decode_start_pos + i - 1;
 
-        /* Check sequence length limit */
-        if (pos >= cfg->max_seq_len - 1) {
-            printf("\n[max sequence length reached]\n");
-            break;
-        }
+        /* In ring-buffer mode, we don't break. We clamp the attention window to max_seq.
+         * The kv_cache_append() already handles the modulo wrap for storage. */
+        int seq_len_for_attention = (pos + 1 > cfg->max_seq_len) ? cfg->max_seq_len : (pos + 1);
 
         /* Thermal safety — sample every 10 tokens to avoid sysfs overhead */
         if (i % 10 == 0) {
