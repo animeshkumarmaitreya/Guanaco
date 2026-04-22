@@ -264,6 +264,10 @@ void cpu_rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, floa
     }
 }
 
+void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float eps) {
+    cpu_rmsnorm(input, weight, output, eps);
+}
+
 void softmax_inplace(Tensor* scores, int seq_len) {
 #ifndef NDEBUG
     assert(scores != NULL);

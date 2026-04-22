@@ -39,6 +39,9 @@ void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C);
  * eps: small constant to avoid division by zero (use 1e-6) */
 void cpu_rmsnorm(const Tensor *input, const Tensor *weight, Tensor *output, float eps);
 
+/* Backward-compatible alias kept for existing tests/call sites. */
+void rmsnorm(const Tensor *input, const Tensor *weight, Tensor *output, float eps);
+
 /* GPU Fused Layer Entry (CUDA) */
 int cuda_transformer_layer_gpu(
     void* wq, int wq_r, int wq_c, int wq_dt,

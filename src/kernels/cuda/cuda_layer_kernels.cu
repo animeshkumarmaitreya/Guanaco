@@ -559,7 +559,8 @@ static void gpu_matvec_q4k(const void* d_W, const float* d_x, float* d_y,
     int threadsPerBlock = 256;
     int warpsPerBlock = threadsPerBlock / 32;
     int blocksPerGrid = (rows + warpsPerBlock - 1) / warpsPerBlock;
-    matvec_q4k_kernel<<<blocksPerGrid, threadsPerBlock, 0, g_layer_stream>>>(
+    int shared_mem_size = 256 * sizeof(float);
+    matvec_q4k_kernel<<<blocksPerGrid, threadsPerBlock, shared_mem_size, g_layer_stream>>>(
         (const block_q4_k_cuda*)d_W, d_x, d_y, rows, num_blocks);
 }
 
