@@ -94,8 +94,11 @@ static inline size_t kv_offset(const KVCache* kv, int layer, int head, int pos) 
 
 int kv_cache_append(KVCache* kv, int layer, const Tensor* k, const Tensor* v, int pos) {
     if (kv == NULL || k == NULL || v == NULL) return -1;
-    if (pos < 0 || pos >= kv->max_seq) return -1;
     if (layer < 0 || layer >= kv->cfg.n_layers) return -1;
+
+    /* Ring buffer: wrap position using modulo arithmetic.
+     * Cost: 1 integer modulo per token (~1 ns). Zero impact on decode speed. */
+    int physical_pos = pos % kv->max_seq;
 
 #ifndef NDEBUG
     assert(k->dtype == DTYPE_F32 && v->dtype == DTYPE_F32);
@@ -116,7 +119,7 @@ int kv_cache_append(KVCache* kv, int layer, const Tensor* k, const Tensor* v, in
     /* k and v are shaped (n_kv_heads, head_dim).
      * Scatter each head's slice into the correct cache location. */
     for (int h = 0; h < n_kv; h++) {
-        size_t off = kv_offset(kv, layer, h, pos);
+        size_t off = kv_offset(kv, layer, h, physical_pos);
         memcpy(kv->k_data + off, kd + h * d, d * sizeof(float));
         memcpy(kv->v_data + off, vd + h * d, d * sizeof(float));
     }

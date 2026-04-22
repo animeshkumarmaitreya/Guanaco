@@ -70,6 +70,10 @@ typedef struct {
     DeviceKind  device;
     int         threads;
     int         chat;
+
+    /* Session management (zero hot-path cost — runs outside decode loop) */
+    const char* session_path;       /* --session <file>       Save/load KV state */
+    const char* prompt_cache_path;  /* --prompt-cache <file>  Frozen prefix cache */
 } CLIArgs;
 
 /* Parse command-line arguments. Returns 0 on success, -1 on error.

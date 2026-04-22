@@ -42,7 +42,7 @@ STUB_TOKENIZER = src/stubs/stub_tokenizer.c
 STUB_ENGINE    = src/stubs/stub_engine.c
 
 # Real implementations
-REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c src/engine/chat.c
+REAL_ENGINE    = src/engine/loader.c src/engine/engine.c src/engine/generate.c src/engine/chat.c src/engine/session.c
 REAL_KERNELS   = src/kernels/cpu/kernels_cpu.c
 REAL_MEMORY    = src/memory/arena.c src/memory/scratch.c src/memory/kv_cache.c
 REAL_TOKENIZER = src/tokenizer/tokenizer.c

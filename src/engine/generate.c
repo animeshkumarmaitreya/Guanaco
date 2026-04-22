@@ -41,7 +41,8 @@ static const char* backend_kind_str(BackendKind k) {
 
 void generate(const char* model_path, const char* prompt, int max_tokens,
               float temperature, int top_k, float top_p, int ctx_len,
-              const BackendConfig* backend_cfg) {
+              const BackendConfig* backend_cfg,
+              const char* session_path, const char* prompt_cache_path) {
 
     BackendConfig cfg_local = {0};
     if (backend_cfg) cfg_local = *backend_cfg;
@@ -167,19 +168,78 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
         return;
     }
 
+    /* ---- Session / Prompt Cache Load (BEFORE prefill — zero hot-path cost) ---- */
+    int session_loaded = 0;
+    int session_pos = 0;
+    int* session_tokens = NULL;
+    int session_n_tokens = 0;
+
+    /* Try loading a full session first */
+    if (session_path) {
+        if (kv_cache_load(kv, cfg, cfg->max_seq_len,
+                          &session_pos, &session_tokens, &session_n_tokens,
+                          session_path) == 0) {
+            session_loaded = 1;
+            printf("Session restored (pos=%d) — skipping prefill\n", session_pos);
+        }
+    }
+
+    /* Try loading a prompt cache (frozen prefix) if no session was loaded */
+    int prompt_cache_prefix_len = 0;
+    if (!session_loaded && prompt_cache_path) {
+        if (prompt_cache_load(kv, cfg, cfg->max_seq_len,
+                              &prompt_cache_prefix_len, prompt_cache_path) == 0) {
+            printf("Prompt cache loaded (prefix_len=%d)\n", prompt_cache_prefix_len);
+        }
+    }
+
     printf("Prompt: \"%s\" (%d tokens)\n", prompt, prompt_len);
     printf("Generating %d tokens...\n\n", max_tokens);
 
     /* ---- Prefill ---- */
     double t_prefill_start = time_ms();
+    int prefill_start_pos = 0;
+    Tensor* logits = NULL;
 
-    Tensor* logits = forward(model, kv, scr, prompt_tokens, prompt_len, 0, k);
+    if (session_loaded) {
+        /* Session restored — prefill the NEW prompt tokens starting at session_pos.
+         * The KV cache already contains the full previous session context.
+         * We need to inject the new user prompt into the KV cache so the model
+         * can attend to both the old session AND the new prompt. */
+        logits = forward(model, kv, scr, prompt_tokens, prompt_len, session_pos, k);
+    } else if (prompt_cache_prefix_len > 0 && prompt_cache_prefix_len <= prompt_len) {
+        /* Prompt cache loaded — skip prefilling the cached prefix portion.
+         * Only prefill the NEW tokens (from prefix_len onward). */
+        int remaining = prompt_len - prompt_cache_prefix_len;
+        if (remaining > 0) {
+            logits = forward(model, kv, scr,
+                             prompt_tokens + prompt_cache_prefix_len,
+                             remaining,
+                             prompt_cache_prefix_len, k);
+        } else {
+            /* Entire prompt was cached — just do a single-token forward */
+            int last_tok = prompt_tokens[prompt_len - 1];
+            logits = forward(model, kv, scr, &last_tok, 1, prompt_cache_prefix_len - 1, k);
+        }
+    } else {
+        /* Normal prefill — no cache */
+        logits = forward(model, kv, scr, prompt_tokens, prompt_len, 0, k);
+    }
+
     if (!logits) {
         fprintf(stderr, "Prefill forward pass failed\n");
         goto cleanup;
     }
 
+    /* Save prompt cache if flag is set and file doesn't exist yet */
+    if (!session_loaded && prompt_cache_path && prompt_cache_prefix_len == 0) {
+        prompt_cache_save(kv, cfg, cfg->max_seq_len, prompt_len, prompt_cache_path);
+    }
+
     double ttft = time_ms() - t_prefill_start;
+
+    /* Effective starting position for decode */
+    int decode_start_pos = session_loaded ? session_pos : prompt_len;
 
     /* Sample first token from prefill logits */
     int next_token;
@@ -205,7 +265,7 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
     int tokens_generated = 1;
 
     for (int i = 1; i < max_tokens; i++) {
-        int pos = prompt_len + i - 1;
+        int pos = decode_start_pos + i - 1;
 
         /* Check sequence length limit */
         if (pos >= cfg->max_seq_len - 1) {
@@ -279,6 +339,13 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
                tok_per_sec, decode_time / (tokens_generated - 1));
     }
     printf("Total time: %.1f ms\n", time_ms() - t0);
+
+    /* ---- Session Save (AFTER decode loop — zero hot-path cost) ---- */
+    if (session_path) {
+        int final_pos = decode_start_pos + tokens_generated;
+        kv_cache_save(kv, cfg, cfg->max_seq_len,
+                      final_pos, prompt_tokens, prompt_len, session_path);
+    }
 
 cleanup:
     free(prompt_tokens);

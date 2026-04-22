@@ -355,6 +355,8 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
     long cores = sysconf(_SC_NPROCESSORS_ONLN);
     args->threads     = (cores > 1) ? (int)(cores <= 8 ? cores : 8) : 1;
     args->chat        = 0;
+    args->session_path      = NULL;
+    args->prompt_cache_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -397,6 +399,12 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
         }
         else if (strcmp(argv[i], "--chat") == 0) {
             args->chat = 1;
+        }
+        else if (strcmp(argv[i], "--session") == 0 && i + 1 < argc) {
+            args->session_path = argv[++i];
+        }
+        else if (strcmp(argv[i], "--prompt-cache") == 0 && i + 1 < argc) {
+            args->prompt_cache_path = argv[++i];
         }
         else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);

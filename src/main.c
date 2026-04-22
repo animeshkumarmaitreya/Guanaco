@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
 
         generate(args.model_path, args.prompt, args.max_tokens,
                  args.temperature, args.top_k, args.top_p, args.ctx_len,
-                 &backend_cfg);
+                 &backend_cfg, args.session_path, args.prompt_cache_path);
 
         return 0;
     }

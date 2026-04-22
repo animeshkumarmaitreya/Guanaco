@@ -55,6 +55,7 @@ Tensor* forward(ModelWeights* model, KVCache* kv, Scratch* scr,
  * top_p:       top-p sampling parameter (1.0 = disabled) */
 void generate(const char* model_path, const char* prompt, int max_tokens,
               float temperature, int top_k, float top_p, int ctx_len,
-              const BackendConfig* backend_cfg);
+              const BackendConfig* backend_cfg,
+              const char* session_path, const char* prompt_cache_path);
 
 #endif /* LLMRT_ENGINE_H */

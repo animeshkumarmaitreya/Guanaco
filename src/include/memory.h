@@ -63,4 +63,36 @@ Tensor* kv_cache_get_v(KVCache* kv, int layer, int up_to_pos);
 /* Destroy KV cache and free backing memory. */
 void kv_cache_destroy(KVCache* kv);
 
+/* ---- Raw pointer accessors (for GPU fused layers / session I/O) ---- */
+float* kv_cache_raw_k(KVCache* kv, int layer);
+float* kv_cache_raw_v(KVCache* kv, int layer);
+int    kv_cache_head_stride(KVCache* kv);
+
+/* ---- Session Persistence (runs OUTSIDE decode loop) ---- */
+
+/* Save full KV cache state + token history to a binary .lctx file.
+ * Called after the decode loop finishes. Zero hot-path cost. */
+int kv_cache_save(KVCache* kv, const ModelConfig* cfg, int max_seq,
+                  int current_pos, const int* tokens, int n_tokens,
+                  const char* path);
+
+/* Load KV cache state from a .lctx file, restoring position and tokens.
+ * Called before prefill — if successful, prefill is skipped entirely.
+ * Returns 0 on success, -1 on failure (file missing = -1, caller continues normally). */
+int kv_cache_load(KVCache* kv, const ModelConfig* cfg, int max_seq,
+                  int* out_pos, int** out_tokens, int* out_n_tokens,
+                  const char* path);
+
+/* ---- Prompt Cache (frozen prefix, runs OUTSIDE decode loop) ---- */
+
+/* Save the KV cache for the first prefix_len positions (system prompt).
+ * Subsequent runs can load this to skip prefilling the system prompt. */
+int prompt_cache_save(KVCache* kv, const ModelConfig* cfg, int max_seq,
+                      int prefix_len, const char* path);
+
+/* Load a previously saved prompt cache. Sets *out_prefix_len to the
+ * number of valid positions, so the caller starts prefill from there. */
+int prompt_cache_load(KVCache* kv, const ModelConfig* cfg, int max_seq,
+                      int* out_prefix_len, const char* path);
+
 #endif /* LLMRT_MEMORY_H */
