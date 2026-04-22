@@ -415,10 +415,10 @@ int cli_parse(int argc, char** argv, CLIArgs* args) {
         return -1;
 #else
         /* Auto-detect GPU layers: if user didn't set --n-gpu-layers, default to
-         * 26 (benchmarked sweet spot for RTX 3050 4GB).
-         * 26 layers × 117MB ≈ 3.0GB, leaving ~1.0GB for activations + system. */
+         * 20 to accommodate KV cache in VRAM. */
         if (args->n_gpu_layers == 0) {
-            args->n_gpu_layers = 26;
+            printf("CUDA device detected. Defaulting n_gpu_layers=20 to accommodate KV cache in VRAM.\n");
+            args->n_gpu_layers = 20;
             fprintf(stderr, "[auto] --n-gpu-layers not set, defaulting to %d for CUDA device\n", args->n_gpu_layers);
         }
 #endif

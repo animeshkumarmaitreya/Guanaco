@@ -37,7 +37,22 @@ void gemm_f32(const Tensor* A, const Tensor* B, Tensor* C);
 /* RMSNorm: output = (input / rms(input)) * weight
  * input: (T, H), weight: (H,), output: (T, H)
  * eps: small constant to avoid division by zero (use 1e-6) */
-void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float eps);
+void cpu_rmsnorm(const Tensor *input, const Tensor *weight, Tensor *output, float eps);
+
+/* GPU Fused Layer Entry (CUDA) */
+int cuda_transformer_layer_gpu(
+    void* wq, int wq_r, int wq_c, int wq_dt,
+    void* wk, int wk_r, int wk_c, int wk_dt,
+    void* wv, int wv_r, int wv_c, int wv_dt,
+    void* wo, int wo_r, int wo_c, int wo_dt,
+    void* gate, int gate_r, int gate_c, int gate_dt,
+    void* up, int up_r, int up_c, int up_dt,
+    void* down, int down_r, int down_c, int down_dt,
+    const float* rms_att, const float* rms_ffn,
+    float* h_hidden,
+    float* h_k_cache, float* h_v_cache, int head_stride,
+    int H, int n_heads, int n_kv_heads, int head_dim,
+    int pos, int layer, int max_seq);
 
 /* Softmax in-place over the last dimension
  * scores: (..., seq_len) — the last dimension is softmax'd

@@ -235,8 +235,20 @@ static void test_cli_device_cuda_errors(void) {
     char* argv[] = {"main", "--model", "test.gguf", "--device", "cuda"};
     CLIArgs args;
     int result = cli_parse(5, argv, &args);
+#if defined(USE_CUDA) && (USE_CUDA == 1)
+    if (result != 0) {
+        FAIL("cli_device_cuda_errors", "expected --device cuda to parse in CUDA-enabled build");
+    } else if (args.device != DEVICE_CUDA) {
+        FAIL("cli_device_cuda_errors", "expected args.device=DEVICE_CUDA");
+    } else if (args.n_gpu_layers <= 0) {
+        FAIL("cli_device_cuda_errors", "expected auto default --n-gpu-layers > 0 for CUDA device");
+    } else {
+        PASS("cli_device_cuda_errors");
+    }
+#else
     if (result == -1) PASS("cli_device_cuda_errors");
-    else              FAIL("cli_device_cuda_errors", "expected error for --device cuda (not implemented yet)");
+    else              FAIL("cli_device_cuda_errors", "expected error for --device cuda when CUDA is disabled");
+#endif
 }
 
 static void test_cli_chat_errors(void) {

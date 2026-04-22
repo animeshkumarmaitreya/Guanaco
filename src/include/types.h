@@ -58,6 +58,7 @@ typedef struct {
   size_t byte_size;   /* authoritative size in bytes (esp. for quant); 0 if
                          unknown */
   int device_residency; /* 0 = CPU, 1 = GPU */
+  void *d_data;         /* GPU device pointer if residency == 1 */
 } Tensor;
 
 /* Whether the tensor is contiguous row-major (C-order) as described by

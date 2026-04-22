@@ -36,7 +36,7 @@ static int cuda_matvec_q4k_wrapper(const Tensor* W, const float* x, float* y) {
     if (W->device_residency == 0) {
         return matvec_q4k_f32(W, x, y);
     }
-    return cuda_matvec_q4k_f32_impl(W->data, x, y, W->shape[0], W->shape[1]);
+    return cuda_matvec_q4k_f32_impl(W->d_data, x, y, W->shape[0], W->shape[1]);
 }
 #endif
 
@@ -61,7 +61,7 @@ Backend* backend_cuda_create(const BackendConfig* cfg) {
     /* Bind heterogeneous CPU fallback wrappers! */
     b->kernels.gemm_f32 = gemm_f32;
     b->kernels.gemm_f32_nn = gemm_f32_nn;
-    b->kernels.rmsnorm = rmsnorm; 
+    b->kernels.rmsnorm = cpu_rmsnorm;
     b->kernels.softmax_inplace = softmax_inplace;
     b->kernels.silu_inplace = silu_inplace;
     b->kernels.rope = rope;

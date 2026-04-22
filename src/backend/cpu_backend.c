@@ -49,7 +49,7 @@ Backend* backend_cpu_create(const BackendConfig* cfg) {
     /* Wire existing CPU kernels directly into the vtable. */
     b->kernels.gemm_f32 = gemm_f32;
     b->kernels.gemm_f32_nn = gemm_f32_nn;
-    b->kernels.rmsnorm = rmsnorm;
+    b->kernels.rmsnorm = cpu_rmsnorm;
     b->kernels.softmax_inplace = softmax_inplace;
     b->kernels.silu_inplace = silu_inplace;
     b->kernels.rope = rope;

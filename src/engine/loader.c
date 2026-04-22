@@ -586,6 +586,12 @@ ModelWeights* load_model(const char* path, int n_gpu_layers, Arena* arena) {
     #define IS_VALID_WEIGHT(dt) ((dt) == DTYPE_F32 || (dt) == DTYPE_Q8_0 || (dt) == DTYPE_Q4_K || (dt) == DTYPE_Q6_K)
 
     int valid = 1;
+    if (cfg.n_layers > 0) {
+        printf("Layer 0 Norm Weights: rms_att=%d, rms_ffn=%d\n", 
+               model->layers[0].rms_att ? (int)model->layers[0].rms_att->dtype : -1,
+               model->layers[0].rms_ffn ? (int)model->layers[0].rms_ffn->dtype : -1);
+    }
+
     for (int l = 0; l < cfg.n_layers; l++) {
         LayerWeights* lw = &model->layers[l];
         if (!lw->wq || !lw->wk || !lw->wv || !lw->wo) {
@@ -672,34 +678,41 @@ ModelWeights* load_model(const char* path, int n_gpu_layers, Arena* arena) {
         int residency = (l < n_gpu_layers) ? 1 : 0;
         LayerWeights* lw = &model->layers[l];
         
-        /* Only set GPU residency for Q4_K tensors — that's the only quant type
-         * with a CUDA kernel. Q6_K/Q8_0/F32 weights stay on host. */
-        #define SET_GPU_IF_Q4K(tensor) do { \
-            if ((tensor) && (tensor)->dtype == DTYPE_Q4_K) (tensor)->device_residency = residency; \
+        /* Set GPU residency for both Q4_K and Q6_K tensors — both have CUDA kernels now. */
+        #define SET_GPU_IF_SUPPORTED(tensor) do { \
+            if ((tensor) && ((tensor)->dtype == DTYPE_Q4_K || (tensor)->dtype == DTYPE_Q6_K)) \
+                (tensor)->device_residency = residency; \
             else if (tensor) (tensor)->device_residency = 0; \
         } while(0)
 
-        SET_GPU_IF_Q4K(lw->wq);
-        SET_GPU_IF_Q4K(lw->wk);
-        SET_GPU_IF_Q4K(lw->wv);
-        SET_GPU_IF_Q4K(lw->wo);
-        SET_GPU_IF_Q4K(lw->w_gate);
-        SET_GPU_IF_Q4K(lw->w_up);
-        SET_GPU_IF_Q4K(lw->w_down);
-        #undef SET_GPU_IF_Q4K
+        SET_GPU_IF_SUPPORTED(lw->wq);
+        SET_GPU_IF_SUPPORTED(lw->wk);
+        SET_GPU_IF_SUPPORTED(lw->wv);
+        SET_GPU_IF_SUPPORTED(lw->wo);
+        SET_GPU_IF_SUPPORTED(lw->w_gate);
+        SET_GPU_IF_SUPPORTED(lw->w_up);
+        SET_GPU_IF_SUPPORTED(lw->w_down);
+        #undef SET_GPU_IF_SUPPORTED
+
         /* Norm weights are always F32 and always stay on CPU */
         if (lw->rms_att) lw->rms_att->device_residency = 0;
         if (lw->rms_ffn) lw->rms_ffn->device_residency = 0;
         
 #ifdef USE_CUDA
         if (residency == 1) {
+            printf("Offloading layer %d to GPU...\n", l);
+            #define SET_RES(t) if(t) (t)->device_residency = 1;
+            SET_RES(lw->wq); SET_RES(lw->wk); SET_RES(lw->wv); SET_RES(lw->wo);
+            SET_RES(lw->w_gate); SET_RES(lw->w_up); SET_RES(lw->w_down);
+            #undef SET_RES
+
             void* d_ptr;
-            /* Upload only Q4_K weights that were marked GPU-resident */
+            /* Upload only weights that were marked GPU-resident */
             #define UPLOAD_IF_GPU(tensor) do { \
                 if ((tensor) && (tensor)->device_residency == 1) { \
                     d_ptr = cuda_upload_weight((tensor)->data, (tensor)->byte_size); \
-                    if (d_ptr) (tensor)->data = d_ptr; \
-                    else (tensor)->device_residency = 0; /* fallback to CPU */ \
+                    if (d_ptr) (tensor)->d_data = d_ptr; \
+                    else (tensor)->device_residency = 0; /* fallback */ \
                 } \
             } while(0)
             

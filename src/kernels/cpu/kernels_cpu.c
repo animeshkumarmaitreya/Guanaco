@@ -196,7 +196,7 @@ void gemm_f32_nn(const Tensor* A, const Tensor* B, Tensor* C) {
     threadpool_parallel_for(g_threadpool, 0, N, 32, gemm_f32_nn_cols, &ctx);
 }
 
-void rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float eps) {
+void cpu_rmsnorm(const Tensor* input, const Tensor* weight, Tensor* output, float eps) {
 #ifndef NDEBUG
     assert(input != NULL && output != NULL);
     assert(input->data != NULL && output->data != NULL);
@@ -401,8 +401,9 @@ void rope(Tensor* q, Tensor* k, int pos, int head_dim) {
     float* q_data = (float*)q->data;
     float* k_data = (float*)k->data;
 
+    float theta = 500000.0f; /* Llama 3.1 theta */
     for (int i = 0; i < head_dim; i += 2) {
-        const float freq = 1.0f / powf(10000.0f, (float)i / (float)head_dim);
+        float freq = 1.0f / powf(theta, (float)i / (float)head_dim);
         const float angle = pos * freq;
         const float cos_val = cosf(angle);
         const float sin_val = sinf(angle);

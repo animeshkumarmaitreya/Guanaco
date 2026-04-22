@@ -91,8 +91,13 @@ $(BUILD)/test_memory: tests/test_memory.c $(REAL_MEMORY) | $(BUILD)
 $(BUILD)/test_tokenizer: tests/test_tokenizer.c $(REAL_TOKENIZER) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+ifeq ($(USE_CUDA),1)
+$(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_QUANT) $(CUDA_OBJS) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+else
 $(BUILD)/test_engine: tests/test_engine.c $(REAL_ENGINE) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_MEMORY) $(REAL_TOKENIZER) $(REAL_BACKEND) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+endif
 
 ifeq ($(USE_CUDA),1)
 $(BUILD)/test_quant: tests/test_quant.c $(REAL_QUANT) $(REAL_THREADPOOL) $(REAL_KERNELS) $(CUDA_OBJS) | $(BUILD)
@@ -105,8 +110,13 @@ endif
 $(BUILD)/test_e2e_smoke: tests/test_e2e_smoke.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+ifeq ($(USE_CUDA),1)
+$(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_QUANT) $(CUDA_OBJS) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+else
 $(BUILD)/test_backend: tests/test_backend.c $(REAL_BACKEND) $(REAL_KERNELS) $(REAL_THREADPOOL) $(REAL_QUANT) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+endif
 
 $(BUILD)/test_threadpool: tests/test_threadpool.c $(REAL_THREADPOOL) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

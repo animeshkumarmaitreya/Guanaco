@@ -11,6 +11,7 @@
  *============================================================================*/
 
 #include "engine.h"
+#include "kernels.h"
 #include "memory.h"
 
 #include <assert.h>
@@ -46,6 +47,10 @@ static Tensor *scratch_tensor(Scratch *scr, int ndim, int d0, int d1, int d2,
   t->byte_size = (size_t)numel * sizeof(float);
   return t;
 }
+
+#ifdef USE_CUDA
+extern void cuda_finish_layer();
+#endif
 
 /* Create a tensor view (no data copy, shares underlying buffer) */
 static Tensor make_view(void *data, int ndim, int d0, int d1, int d2) {
@@ -213,6 +218,9 @@ static void embedding_lookup(const Tensor *embedding, int *token_ids,
 
   for (int t = 0; t < n_tokens; t++) {
     int tok = token_ids[t];
+    if (t == 0) {
+        // Embedding lookup for tok
+    }
     assert(tok >= 0 && tok < embedding->shape[0]);
 
     if (embedding->dtype == DTYPE_F32) {
@@ -295,41 +303,50 @@ void transformer_layer(Tensor *hidden, LayerWeights *weights, KVCache *kv,
   int n_kv_heads = cfg->n_kv_heads;
   int head_dim = cfg->head_dim;
   int kv_dim = n_kv_heads * head_dim; /* total KV projection size */
+
+  extern float* kv_cache_raw_k(KVCache* kv, int layer);
+  extern float* kv_cache_raw_v(KVCache* kv, int layer);
+  extern int kv_cache_head_stride(KVCache* kv);
+
   assert(n_kv_heads > 0);
   assert(n_heads % n_kv_heads == 0);
   int heads_per_kv = n_heads / n_kv_heads; /* for GQA */
 
 #ifdef USE_CUDA
-  /* GPU fast path: if this layer's weights are on GPU and T=1 (decode),
-   * use the fused CUDA layer which keeps activations in VRAM. */
-  if (T == 1 && weights->wq && weights->wq->device_residency == 1) {
-    extern int cuda_transformer_layer_gpu(
-        const void*, int, int, const void*, int, int, const void*, int, int,
-        const void*, int, int, const void*, int, int, const void*, int, int,
-        const void*, int, int, const float*, const float*, float*,
-        float*, float*, int, int, int, int, int, int, int, int, int);
-    extern float* kv_cache_raw_k(KVCache* kv, int layer);
-    extern float* kv_cache_raw_v(KVCache* kv, int layer);
-    extern int kv_cache_head_stride(KVCache* kv);
+  /* If we are about to run on CPU, make sure any pending GPU work is finished. */
+  if (T > 1 || !(weights->wq->device_residency == 1 && weights->wk->device_residency == 1 && 
+                weights->wv->device_residency == 1 && weights->wo->device_residency == 1 && 
+                weights->w_gate->device_residency == 1 && weights->w_up->device_residency == 1 && 
+                weights->w_down->device_residency == 1)) {
+      cuda_finish_layer();
+  }
+
+  #define IS_GPU_READY(t) ((t) && (t)->device_residency == 1 && ((t)->dtype == DTYPE_Q4_K || (t)->dtype == DTYPE_Q6_K))
+  if (T == 1 && IS_GPU_READY(weights->wq) && IS_GPU_READY(weights->wk) &&
+      IS_GPU_READY(weights->wv) && IS_GPU_READY(weights->wo) &&
+      IS_GPU_READY(weights->w_gate) && IS_GPU_READY(weights->w_up) &&
+      IS_GPU_READY(weights->w_down)) {
 
     float* h_k = kv_cache_raw_k(kv, layer);
     float* h_v = kv_cache_raw_v(kv, layer);
     int head_stride = kv_cache_head_stride(kv);
 
-    cuda_transformer_layer_gpu(
-        weights->wq->data, weights->wq->shape[0], weights->wq->shape[1],
-        weights->wk->data, weights->wk->shape[0], weights->wk->shape[1],
-        weights->wv->data, weights->wv->shape[0], weights->wv->shape[1],
-        weights->wo->data, weights->wo->shape[0], weights->wo->shape[1],
-        weights->w_gate->data, weights->w_gate->shape[0], weights->w_gate->shape[1],
-        weights->w_up->data, weights->w_up->shape[0], weights->w_up->shape[1],
-        weights->w_down->data, weights->w_down->shape[0], weights->w_down->shape[1],
+    int cuda_layer_rc = cuda_transformer_layer_gpu(
+        weights->wq->d_data, weights->wq->shape[0], weights->wq->shape[1], (int)weights->wq->dtype,
+        weights->wk->d_data, weights->wk->shape[0], weights->wk->shape[1], (int)weights->wk->dtype,
+        weights->wv->d_data, weights->wv->shape[0], weights->wv->shape[1], (int)weights->wv->dtype,
+        weights->wo->d_data, weights->wo->shape[0], weights->wo->shape[1], (int)weights->wo->dtype,
+        weights->w_gate->d_data, weights->w_gate->shape[0], weights->w_gate->shape[1], (int)weights->w_gate->dtype,
+        weights->w_up->d_data, weights->w_up->shape[0], weights->w_up->shape[1], (int)weights->w_up->dtype,
+        weights->w_down->d_data, weights->w_down->shape[0], weights->w_down->shape[1], (int)weights->w_down->dtype,
         (const float*)weights->rms_att->data, (const float*)weights->rms_ffn->data,
         (float*)hidden->data,
         h_k, h_v, head_stride,
-        H, kv_dim, cfg->ff_dim, head_dim,
-        n_heads, n_kv_heads, pos, kv_cache_head_stride(kv) / head_dim /* max_seq */);
-    return;
+        H, n_heads, n_kv_heads, head_dim,
+        pos, layer, cfg->max_seq_len);
+    if (cuda_layer_rc == 0) {
+      return;
+    }
   }
 #endif
 
@@ -373,6 +390,19 @@ void transformer_layer(Tensor *hidden, LayerWeights *weights, KVCache *kv,
 
     kv_cache_append(kv, layer, &k_tok, &v_tok, pos + t);
   }
+
+#ifdef USE_CUDA
+  /* If this layer is GPU-resident, we must sync the new K/V tokens to VRAM 
+   * so that subsequent GPU-resident steps can see them. */
+  if (weights->wq->device_residency == 1) {
+      extern void cuda_sync_kv_cache(int layer, int n_kv_heads, int head_dim, int pos, int T, 
+                                   const float* h_k_cache, const float* h_v_cache, int stride0, int max_seq);
+      float* h_k = kv_cache_raw_k(kv, layer);
+      float* h_v = kv_cache_raw_v(kv, layer);
+      int head_stride = kv_cache_head_stride(kv);
+      cuda_sync_kv_cache(layer, n_kv_heads, head_dim, pos, T, h_k, h_v, head_stride, cfg->max_seq_len);
+  }
+#endif
 
   /* ---- Step 6: Get cached K, V ---- */
   int seq_len = pos + T; /* total sequence length so far */

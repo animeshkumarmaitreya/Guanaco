@@ -9,6 +9,7 @@ This document is a comprehensive guide for the next developer. It consolidates t
 | **Phase 0 (Offload Fix)** | 0.6 tok/s | 15.7s | ✅ Completed |
 | **Phase 3 (AVX2 + Prefetch)** | 0.7 tok/s | 6.9s | ✅ Completed |
 | **Phase 1 (Fused GPU Layer)** | **1.3 tok/s** | **3.1s** | ✅ Completed (v1) |
+| **Phase 1.5 (GPU Attention Residency)** | TBD | TBD | ✅ Implemented, benchmark pending |
 
 ---
 
@@ -25,8 +26,8 @@ The system dynamically splits the 32-layer Llama model.
 - **Workflow**: 
   1. H→D hidden state upload (once).
   2. GPU: RMSNorm → QKV Proj → RoPE.
-  3. D→H Q/K/V download for CPU Attention (Numerical Safety).
-  4. H→D Attn-out upload.
+  3. GPU: Q×Kᵀ → Softmax → Attn×V (decode attention stays in VRAM).
+  4. Host KV cache and device KV mirror are updated in lockstep.
   5. GPU: Out-Proj → Residual → RMSNorm → MLP (Gate/Up/SiLU/Down) → Residual.
   6. D→H Final hidden state download (once).
 
@@ -53,8 +54,16 @@ The system dynamically splits the 32-layer Llama model.
 ## 📅 Future Roadmap (Phases 1.5 - 6)
 
 ### Phase 1.5: Fused GPU Attention (High Priority)
-- The current path falls back to CPU attention for numerical correctness.
-- **Goal**: Fix the `cuda_rope_kernel` and `softmax` logic in `cuda_layer_kernels.cu` to keep attention in VRAM. This will push us toward **1.8+ tok/s**.
+- CPU fallback for decode attention has been removed in `cuda_layer_kernels.cu`.
+- Current implementation keeps attention math on GPU and maintains a per-layer device KV mirror for decode-time reads.
+- **Next Goal**: benchmark tok/s + TTFT with long prompts and validate numerical drift against CPU golden output on representative prompts.
+
+### Live Development Loop (Approvals + Debugging)
+1. Build with `make USE_CUDA=1 USE_PTHREAD=1 -j$(nproc)`.
+2. Run validation with `make USE_CUDA=1 USE_PTHREAD=1 test`.
+3. If crash/NaN appears, reproduce minimally (`test_quant`, then `test_engine`), then debug with `gdb`/`cuda-gdb`.
+4. Keep only root-cause fixes (no temporary hacks), then rerun full tests.
+5. Record outcome in handover after each approved change set.
 
 ### Phase 2: Shared Memory Matvec
 - Update the Q4_K kernel to load scale/min blocks into `__shared__` memory.
@@ -73,3 +82,4 @@ The system dynamically splits the 32-layer Llama model.
 - [ ] Verify GPU kernels via `test_quant` parity test.
 - [ ] Check `metrics.log` if performance drops (Thermal throttling @ 87°C).
 - [ ] Keep tensors 32-byte aligned for AVX2 and CUDA memory access rules.
+- [x] Confirm CUDA-enabled test linking includes `.cu` objects for engine/backend targets.
