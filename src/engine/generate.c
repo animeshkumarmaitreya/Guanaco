@@ -198,7 +198,6 @@ void generate(const char* model_path, const char* prompt, int max_tokens,
 
     /* ---- Prefill ---- */
     double t_prefill_start = time_ms();
-    int prefill_start_pos = 0;
     Tensor* logits = NULL;
 
     if (session_loaded) {
