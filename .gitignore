@@ -26,3 +26,4 @@ scripts/*.log
 working.txt
 ahead.txt
 gdb_script.txt
+GUANACO_RESUME_ATS_BRIEF.md
