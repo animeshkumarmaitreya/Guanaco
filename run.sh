@@ -40,6 +40,8 @@ function show_help {
     echo "  --n-gpu-layers <n>   Number of GPU layers to offload"
     echo "  --ctx <n>            Context buffer size limit"
     echo "  --max-tokens <n>     Maximum tokens to generate"
+    echo "  --session <file>     Path to save/load session (.lctx)"
+    echo "  --prompt-cache <f>   Path to frozen prompt cache"
     echo "  --temp <val>         Sampling temperature"
     echo "  --top-k <val>        Top-K sampling value"
     echo "  --top-p <val>        Top-P sampling value"
@@ -100,7 +102,20 @@ function run_wizard {
     read -p "Max tokens to generate [128]: " MAX_TOK_INPUT
     ARGS="$ARGS --max-tokens ${MAX_TOK_INPUT:-128}"
 
-    # 5. Advanced (Sampling)
+    # 5. Advanced (Sampling & Sessions)
+    read -p "Show session/cache options? (y/n) [n]: " SESS_INPUT
+    if [[ "$SESS_INPUT" =~ ^[Yy]$ ]]; then
+        read -p "Session file path (e.g., chat.lctx) [none]: " SESSION_INPUT
+        if [[ -n "$SESSION_INPUT" ]]; then
+            ARGS="$ARGS --session $SESSION_INPUT"
+        fi
+        read -p "Prompt cache path (e.g., system.lctx) [none]: " PCACHE_INPUT
+        if [[ -n "$PCACHE_INPUT" ]]; then
+            ARGS="$ARGS --prompt-cache $PCACHE_INPUT"
+        fi
+    fi
+
+    # 6. Advanced (Sampling)
     read -p "Show advanced sampling parameters? (y/n) [n]: " ADV_INPUT
     if [[ "$ADV_INPUT" =~ ^[Yy]$ ]]; then
         read -p "Temperature [0.70]: " TEMP_INPUT
@@ -131,6 +146,8 @@ else
             --device) ARGS="$ARGS --device $2"; shift ;;
             --ctx) ARGS="$ARGS --ctx $2"; shift ;;
             --max-tokens) ARGS="$ARGS --max-tokens $2"; shift ;;
+            --session) ARGS="$ARGS --session $2"; shift ;;
+            --prompt-cache) ARGS="$ARGS --prompt-cache $2"; shift ;;
             --temp) ARGS="$ARGS --temperature $2"; shift ;;
             --top-k) ARGS="$ARGS --top-k $2"; shift ;;
             --top-p) ARGS="$ARGS --top-p $2"; shift ;;
