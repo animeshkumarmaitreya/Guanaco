@@ -1,6 +1,5 @@
 # Guanaco: High-Performance Local LLM Inference Engine
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language: C11](https://img.shields.io/badge/Language-C11%20%7C%20CUDA-green.svg)]()
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)]()
 [![SIMD: AVX2 / FMA](https://img.shields.io/badge/SIMD-AVX2%20%2F%20FMA-purple.svg)]()
@@ -186,7 +185,3 @@ make debug
 make test
 ```
 
----
-
-## 📜 License
-Guanaco is released under the **MIT License**. Free for educational, research, and personal use.
