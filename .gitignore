@@ -18,3 +18,11 @@ golden_data/*.npy
 
 core
 vgcore.*
+
+# Local scratch, logs, and session dumps
+*.log
+scripts/*.log
+*.lctx
+working.txt
+ahead.txt
+gdb_script.txt

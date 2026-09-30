@@ -36,6 +36,8 @@ If you prefer to run the binary directly (`./build/llmrt`), the following flags 
 | `--n-gpu-layers <N>` | Number of transformer layers to offload to GPU. | 0 |
 | `--ctx <N>` | Maximum context buffer size (token limit). | 8192 |
 | `--max-tokens <N>` | Maximum number of new tokens to generate. | 128 |
+| `--session <path>` | Save or resume KV context state (`.lctx`). | - |
+| `--prompt-cache <path>` | Pre-load frozen prompt prefix cache. | - |
 | `--temperature <F>`| Controls randomness (Lower = more focused). | 0.70 |
 | `--top-k <N>` | Limits sampling to top K tokens. | 40 |
 | `--top-p <F>` | Nucleus sampling threshold. | 0.90 |
